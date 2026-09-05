@@ -63,10 +63,11 @@ ASK_TOOLS = {"AskUserQuestion": "Question for you", "ExitPlanMode": "Plan to app
 
 
 def _short(s: str, n: int) -> str:
+    """Cut to n characters with an ASCII ellipsis (the device fonts have no "…")."""
     s = (s or "").strip()
     if len(s) <= n:
         return s
-    return s[: n - 1].rstrip() + "…"
+    return s[: n - 3].rstrip() + "..."
 
 
 def _basename(p: str) -> str:
@@ -243,7 +244,7 @@ class Companion:
             s.pending_permission = ""
             s.agents = 0
             if long_turn:
-                s.set_state(CC_TURN_DONE, "Done · your turn", now)
+                s.set_state(CC_TURN_DONE, "Finished, your turn", now)
             else:
                 s.set_state(CC_DONE, "Your turn", now)
         elif name == "StopFailure":
@@ -431,8 +432,9 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
 
 
 def hostname_short() -> str:
+    """This machine's own short host name (untruncated; the wire field is cut later)."""
     try:
-        return socket.gethostname().split(".", 1)[0][:12]
+        return socket.gethostname().split(".", 1)[0]
     except OSError:
         return ""
 

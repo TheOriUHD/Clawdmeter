@@ -510,7 +510,9 @@ def shrink_payload(payload: dict, limit: int = BLE_PAYLOAD_MAX) -> bytes:
     """Encode compactly; drop the optional extras (trend, then companion) if it
     would overflow the firmware's receive buffer."""
     def enc(p: dict) -> bytes:
-        return json.dumps(p, separators=(",", ":")).encode()
+        # UTF-8 on the wire: "…" is 3 bytes, its \u escape would be 6 and the
+        # firmware buffer is counted in bytes.
+        return json.dumps(p, separators=(",", ":"), ensure_ascii=False).encode()
     data = enc(payload)
     for key in ("tr", "cc"):
         if len(data) <= limit:

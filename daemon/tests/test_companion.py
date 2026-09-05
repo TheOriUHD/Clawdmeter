@@ -38,11 +38,12 @@ def test_turn_lifecycle_and_labels():
     assert c.summary(now=t + 6)["s"] == cc.CC_THINKING
 
     c.ingest(ev("PreToolUse", tool_name="Bash", tool_input={"command": "pio run -d firmware -e sim\necho done"}), now=t + 7)
-    assert c.summary(now=t + 7)["l"] == "Bash: pio run -d firmwa…"
+    lbl = c.summary(now=t + 7)["l"]
+    assert lbl.startswith("Bash: pio run -d") and lbl.endswith("...") and len(lbl) <= cc.LABEL_MAX
 
     # A long turn ends in the nudge-worthy state; a short one stays quiet.
     c.ingest(ev("Stop", stop_reason="end_turn"), now=t + 40)
-    assert c.summary(now=t + 40)["s"] == cc.CC_TURN_DONE
+    assert c.summary(now=t + 40)["s"] == cc.CC_TURN_DONE and c.summary(now=t + 40)["l"].isascii()
     c.ingest(ev("UserPromptSubmit", prompt="thanks"), now=t + 41)
     c.ingest(ev("Stop"), now=t + 45)
     assert c.summary(now=t + 45)["s"] == cc.CC_DONE
