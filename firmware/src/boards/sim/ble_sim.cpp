@@ -3,6 +3,7 @@
 // ble_has_data()/ble_get_data() path main.cpp uses on hardware — so JSON
 // parsing, usage-rate tracking, and the chime trigger all run for real.
 #include "../../ble.h"
+#include "../../ui.h"
 #include "sim_platform.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -110,9 +111,33 @@ void ble_clear_bonds(void) { printf("[sim] pair gesture completed — bonds clea
 bool ble_has_bonds(void)   { return true; }
 
 bool ble_has_data(void) { return connected && pending; }
+
+// Sim-only page control so headless screenshots can capture any screen:
+//   SIM_PAGE=splash|usage|settings|about   (env, applied on the first payload)
+//   "_sim":{"page":"settings"}             (per scenario line, applied on delivery)
+// main.cpp's parse_json ignores the unknown "_sim" key.
+static void sim_apply_page(const char* p) {
+    if (!p) return;
+    if      (strcmp(p, "splash") == 0)   ui_show_screen(SCREEN_SPLASH);
+    else if (strcmp(p, "usage") == 0)    ui_show_screen(SCREEN_USAGE);
+    else if (strcmp(p, "settings") == 0) ui_show_screen(SCREEN_SETTINGS);
+    else if (strcmp(p, "about") == 0)    ui_show_screen(SCREEN_ABOUT);
+    else printf("[sim] unknown page '%s'\n", p);
+}
+
 const char* ble_get_data(void) {
     pending = false;
     delivered_ms = millis();
+    static bool env_page_applied = false;
+    if (!env_page_applied) {
+        env_page_applied = true;
+        sim_apply_page(getenv("SIM_PAGE"));
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, states[cur].json) == DeserializationError::Ok) {
+        const char* pg = doc["_sim"]["page"] | (const char*)NULL;
+        if (pg) sim_apply_page(pg);
+    }
     return states[cur].json;
 }
 void ble_send_ack(void)  {}

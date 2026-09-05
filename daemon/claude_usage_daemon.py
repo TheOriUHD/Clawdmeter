@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Claude Usage Tracker Daemon (BLE) — macOS port of claude-usage-daemon.sh.
 
-Polls Claude API rate-limit headers and writes a JSON payload to the
-ESP32 "Clawdmeter" peripheral over a custom GATT service. Uses
-bleak (CoreBluetooth backend on macOS).
+Polls the official OAuth usage endpoint (token-free; also carries the
+per-model weekly limits such as Fable), falling back to the Claude API
+rate-limit headers, and writes a JSON payload to the ESP32 "Clawdmeter"
+peripheral over a custom GATT service. Uses bleak (CoreBluetooth backend
+on macOS).
 """
 
 import asyncio
@@ -41,6 +43,7 @@ SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-addres
 CONFIG_FILE = Path.home() / ".config" / "claude-usage-monitor" / "config"
 
 API_URL = "https://api.anthropic.com/v1/messages"
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 API_HEADERS_TEMPLATE = {
     "anthropic-version": "2023-06-01",
     "anthropic-beta": "oauth-2025-04-20",
@@ -340,8 +343,10 @@ def read_chime_setting() -> str:
 def read_clock_setting() -> str:
     """Read the `clock` option from the config file. One of: off|auto|12|24.
 
-    Defaults to "off" (no clock; the device keeps showing "Usage") so existing
-    setups are unaffected until the user opts in.
+    Defaults to "auto": the daemon always ships the wall-clock time and the
+    host's hour format, and the DEVICE decides whether to show it (Settings →
+    Clock, on the touch screen). Set `clock = off` here to never send time at
+    all — then the device can't show a clock regardless of its own setting.
     """
     try:
         if CONFIG_FILE.exists():
@@ -356,7 +361,7 @@ def read_clock_setting() -> str:
                         return val
     except OSError:
         pass
-    return "off"
+    return "auto"
 
 
 def add_chime_field(payload: dict) -> None:
@@ -402,6 +407,158 @@ def add_clock_fields(payload: dict) -> None:
     tf = 24 if clock == "24" else 12 if clock == "12" else detect_hour_format()
     payload["t"] = int(time.time()) + time.localtime().tm_gmtoff
     payload["tf"] = tf
+
+
+# --- Official usage endpoint ---------------------------------------------------
+#
+# GET /api/oauth/usage is what Claude Code's own `/usage` screen reads. It
+# returns the same 5h/7d windows the rate-limit headers carry PLUS the
+# per-model weekly limits (limits[] entries of kind "weekly_scoped" with a
+# model scope — e.g. "Fable" on Max plans), and it costs zero tokens, whereas
+# the header method spends a 1-token Haiku message per poll (~1,440/day).
+#
+# It is undocumented and was rate-limited once before (#29 → reverted in #37,
+# under a 5s retry loop), so: fixed 60s cadence, a 15-minute bench after any
+# 429, and the header method as the automatic fallback for every failure or
+# unrecognised shape. Behaviour can never be worse than the header method.
+USAGE_ENDPOINT_COOLDOWN_S = 900
+SCOPED_NAME_MAX = 15                    # firmware ScopedWeekly.name is char[16]
+_usage_endpoint_cooldown_until = 0.0
+_usage_source: str | None = None        # "endpoint" | "headers" — logged on change
+
+
+def _note_usage_source(src: str) -> None:
+    global _usage_source
+    if src != _usage_source:
+        _usage_source = src
+        log("Usage source: " + ("OAuth usage endpoint" if src == "endpoint"
+                                else "rate-limit headers (fallback)"))
+
+
+def _iso_reset_minutes(iso, now: float) -> int:
+    """Minutes from `now` until an ISO-8601 reset timestamp; 0 if past/invalid."""
+    if not isinstance(iso, str) or not iso:
+        return 0
+    try:
+        ts = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=datetime.timezone.utc)
+    try:
+        mins = (ts.timestamp() - now) / 60.0
+    except (OSError, OverflowError):
+        return 0
+    return int(round(mins)) if mins > 0 else 0
+
+
+def _clamp_pct(value) -> int | None:
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+
+def scoped_weekly_limits(limits) -> list[dict]:
+    """[{"n": <label>, "p": <0-100>}, ...] for every weekly scoped-model limit.
+
+    The label is the API's display name (falling back to the model id), cut to
+    the firmware's buffer. Accounts without scoped limits yield [] and the
+    "ws" key is omitted — key absence, never 0%, is the "no such limit" signal.
+    """
+    out: list[dict] = []
+    if not isinstance(limits, list):
+        return out
+    for lim in limits:
+        if not isinstance(lim, dict) or lim.get("kind") != "weekly_scoped":
+            continue
+        scope = lim.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        if not isinstance(model, dict):
+            continue
+        name = model.get("display_name") or model.get("id")
+        pct = _clamp_pct(lim.get("percent"))
+        if not isinstance(name, str) or not name or pct is None:
+            continue
+        out.append({"n": name[:SCOPED_NAME_MAX], "p": pct})
+    return out
+
+
+def parse_usage_response(data, now: float) -> dict | None:
+    """Build the Pro/Max device payload from the usage endpoint's JSON.
+
+    None when the response isn't the full Pro/Max shape (both the 5h and 7d
+    windows present): Enterprise spending-limit accounts have no weekly window
+    and stay on the header method, which remains the sole authority on
+    Enterprise detection. Utilization here is already a 0-100 percentage (the
+    headers use a 0-1 fraction).
+    """
+    if not isinstance(data, dict):
+        return None
+    five = data.get("five_hour")
+    seven = data.get("seven_day")
+    s = _clamp_pct(five.get("utilization")) if isinstance(five, dict) else None
+    w = _clamp_pct(seven.get("utilization")) if isinstance(seven, dict) else None
+    if s is None or w is None:
+        return None
+    payload = {
+        "s": s,
+        "sr": _iso_reset_minutes(five.get("resets_at"), now),
+        "w": w,
+        "wr": _iso_reset_minutes(seven.get("resets_at"), now),
+        "st": "allowed" if s < 100 else "rejected",
+        "acct": "pro",
+        "ok": True,
+    }
+    ws = scoped_weekly_limits(data.get("limits"))
+    if ws:
+        payload["ws"] = ws
+    return payload
+
+
+async def poll_usage_endpoint(token: str) -> dict | None:
+    """Poll the official usage endpoint; None means "use the header fallback".
+
+    Every failure is a None — including 401/403 — so poll_api() stays the one
+    place that decides a token is dead (TokenExpired). A 429 additionally
+    benches the endpoint for USAGE_ENDPOINT_COOLDOWN_S, so a rate-limited
+    endpoint is never re-hammered on every cycle.
+    """
+    global _usage_endpoint_cooldown_until
+    now = time.time()
+    if now < _usage_endpoint_cooldown_until:
+        return None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": API_HEADERS_TEMPLATE["anthropic-beta"],
+        "User-Agent": API_HEADERS_TEMPLATE["User-Agent"],
+        "Accept": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            resp = await http.get(USAGE_URL, headers=headers)
+    except httpx.HTTPError as e:
+        log(f"Usage endpoint failed: {e}")
+        return None
+    if resp.status_code == 429:
+        _usage_endpoint_cooldown_until = now + USAGE_ENDPOINT_COOLDOWN_S
+        log(f"Usage endpoint rate-limited (429) — benched for "
+            f"{USAGE_ENDPOINT_COOLDOWN_S // 60} min, using the header fallback")
+        return None
+    if resp.status_code != 200:
+        log(f"Usage endpoint HTTP {resp.status_code}: {resp.text[:200]}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        log("Usage endpoint returned non-JSON")
+        return None
+    payload = parse_usage_response(data, now)
+    if payload is None:
+        return None            # not a Pro/Max shape — let the header method classify it
+    add_chime_field(payload)   # adds "c":1 iff the config opts in
+    add_clock_fields(payload)  # adds "t" + "tf" unless the config turns the clock off
+    return payload
 
 
 async def poll_api(token: str) -> dict | None:
@@ -563,7 +720,16 @@ async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, 
             log(f"No token in {d}; skipping")
             continue
         try:
-            payload = await poll_api(token)
+            # Prefer the official usage endpoint (token-free; carries the
+            # per-model weekly limits). Fall back to the rate-limit headers of
+            # a 1-token message call whenever it's unavailable.
+            payload = await poll_usage_endpoint(token)
+            if payload is not None:
+                _note_usage_source("endpoint")
+            else:
+                payload = await poll_api(token)
+                if payload is not None:
+                    _note_usage_source("headers")
         except TokenExpired:
             log(f"Token in {d} expired/invalid; skipping")
             continue

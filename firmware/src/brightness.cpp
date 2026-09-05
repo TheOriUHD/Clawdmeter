@@ -5,7 +5,8 @@
 
 // Four-step ramp. The default (index 2) is 200 — identical to the prior
 // hard-coded DISPLAY_DEFAULT_BRIGHTNESS, so cycling is purely additive.
-static const uint8_t LEVELS[] = {64, 128, 200, 255};
+static const uint8_t     LEVELS[] = {64, 128, 200, 255};
+static const char* const LABELS[] = {"25%", "50%", "80%", "100%"};
 #define LEVELS_COUNT (sizeof(LEVELS) / sizeof(LEVELS[0]))
 #define DEFAULT_IDX  2
 
@@ -22,8 +23,9 @@ void brightness_init(void) {
     Serial.printf("Brightness init: level=%u (idx=%u)\n", LEVELS[cur_idx], cur_idx);
 }
 
-void brightness_cycle(void) {
-    cur_idx = (cur_idx + 1) % LEVELS_COUNT;
+void brightness_set_index(uint8_t idx) {
+    if (idx >= LEVELS_COUNT) idx = DEFAULT_IDX;
+    cur_idx = idx;
 
     Preferences prefs;
     prefs.begin("clawdmeter", false);
@@ -31,9 +33,14 @@ void brightness_cycle(void) {
     prefs.end();
 
     idle_set_awake_brightness(LEVELS[cur_idx]);
-    Serial.printf("Brightness cycled: level=%u (idx=%u)\n", LEVELS[cur_idx], cur_idx);
+    Serial.printf("Brightness set: level=%u (idx=%u)\n", LEVELS[cur_idx], cur_idx);
 }
 
-uint8_t brightness_get(void) {
-    return LEVELS[cur_idx];
+void brightness_cycle(void) {
+    brightness_set_index((cur_idx + 1) % LEVELS_COUNT);
 }
+
+uint8_t     brightness_get_index(void)      { return cur_idx; }
+uint8_t     brightness_level_count(void)    { return LEVELS_COUNT; }
+const char* brightness_label(uint8_t idx)   { return idx < LEVELS_COUNT ? LABELS[idx] : "?"; }
+uint8_t     brightness_get(void)            { return LEVELS[cur_idx]; }

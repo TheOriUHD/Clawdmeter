@@ -12,3 +12,6 @@ static inline void* heap_caps_malloc(size_t size, unsigned caps) {
     return malloc(size);
 }
 static inline void heap_caps_free(void* ptr) { free(ptr); }
+// The About page reports free internal RAM; the desktop has no meaningful
+// answer, so report 0 and the UI shows "n/a".
+static inline size_t heap_caps_get_free_size(unsigned caps) { (void)caps; return 0; }
