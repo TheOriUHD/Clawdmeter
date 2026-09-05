@@ -234,9 +234,14 @@ config to pick your own). Prefer loopback only? `companion_bind = 127.0.0.1`,
 and give ssh hosts `RemoteForward 47393 127.0.0.1:47393` instead.
 
 Two things to know: the *usage numbers* still come from the bridge's own
-Claude Code login (its Keychain token, refreshed whenever Claude Code or the
-desktop app runs there), and each hook is one background `curl` line with a
-2-second cap that never fails a tool call if the bridge is unreachable. The
+Claude Code login — and that stored token lives about eight hours and is only
+renewed by a CLI session, not by the desktop app. So the daemon keeps it fresh
+itself: shortly before expiry (or right after a 401) it runs one tiny
+print-mode CLI call (`claude -p … --model haiku`, one Haiku call per eight
+hours, kept off the device) so Claude Code renews its own token
+(`token_keeper = off` disables this). And each hook is one background `curl`
+line with a 2-second cap that never fails a tool call if the bridge is
+unreachable. The
 daemon config has `companion = on|off`, `companion_port`, `companion_bind`,
 `companion_token` and `trend = on|off`; see `daemon/config.example`.
 

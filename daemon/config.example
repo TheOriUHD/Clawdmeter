@@ -77,3 +77,16 @@ companion_bind = 0.0.0.0
 #   on  = record and send (default)
 #   off = no history, no Trend data
 trend = on
+
+# Token keeper. The daemon reads the OAuth token Claude Code stores (Keychain on
+# macOS, .credentials.json elsewhere) and never refreshes it itself — Claude
+# Code owns that. The token lives about eight hours, and only a CLI session
+# renews it; if you use the Claude desktop app instead of the CLI, it expires
+# and the device shows "No data". With the keeper on, the daemon runs one tiny
+# print-mode CLI call (`claude -p … --model haiku`) shortly before the stored
+# token expires, or right after a poll is rejected, so Claude Code renews it.
+# One Haiku call per eight hours; the session stays off the device.
+#   on  = keep the token fresh (default)
+#   off = never spawn the CLI; renew by using the CLI yourself
+token_keeper = on
+

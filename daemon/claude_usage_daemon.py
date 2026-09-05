@@ -32,9 +32,11 @@ from bleak.exc import BleakError
 try:
     import companion as cc_mod
     import trend as trend_mod
+    import tokenkeeper as tk_mod
 except ImportError:  # pragma: no cover - package import path
     from . import companion as cc_mod
     from . import trend as trend_mod
+    from . import tokenkeeper as tk_mod
 
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
@@ -130,6 +132,45 @@ def _decode_keychain_blob(raw: str) -> str:
         except (ValueError, UnicodeDecodeError):
             return raw
     return raw
+
+
+def _extract_expiry_s(blob: str) -> float | None:
+    """The stored token's `expiresAt` (ms since the epoch in Claude Code's blob) as seconds, or None."""
+    try:
+        data = json.loads(blob.strip())
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for obj in [data] + [v for v in data.values() if isinstance(v, dict)]:
+        exp = obj.get("expiresAt")
+        if isinstance(exp, (int, float)) and exp > 0:
+            return exp / 1000.0 if exp > 1e11 else float(exp)
+    return None
+
+
+def _read_keychain_blob() -> str | None:
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", getpass.getuser(), "-w"],
+            check=True, capture_output=True, text=True, timeout=10)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    return _decode_keychain_blob(out.stdout)
+
+
+def read_token_expiry(config_dir: Path = DEFAULT_CONFIG_DIR) -> float | None:
+    """When the stored token expires (seconds since the epoch), or None if unknown."""
+    cred = config_dir / ".credentials.json"
+    try:
+        if cred.exists():
+            return _extract_expiry_s(cred.read_text())
+    except OSError:
+        return None
+    if sys.platform == "darwin" and config_dir == DEFAULT_CONFIG_DIR:
+        blob = _read_keychain_blob()
+        return _extract_expiry_s(blob) if blob else None
+    return None
 
 
 def _read_token_keychain() -> str | None:
@@ -444,6 +485,23 @@ def read_trend_setting() -> str:
     """`trend` config option: on|off (default on) — record history for the Trend page."""
     v = (_config_value("trend") or "on").lower()
     return v if v in ("on", "off") else "on"
+
+
+def read_token_keeper_setting() -> str:
+    """`token_keeper` config option: on|off (default on) — see tokenkeeper.py."""
+    v = (_config_value("token_keeper") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
+TOKEN_KEEPER = tk_mod.TokenKeeper(cwd=CONFIG_FILE.parent, log=log)
+
+
+async def keep_token_fresh(reason: str) -> bool:
+    """Let Claude Code renew its stored token (once per cooldown) when it is
+    expiring or was just rejected. Off with `token_keeper = off`."""
+    if read_token_keeper_setting() != "on":
+        return False
+    return await TOKEN_KEEPER.run(reason)
 
 
 # --- Companion + Trend -------------------------------------------------------------
@@ -1199,7 +1257,15 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 # OAuth endpoint's rate limit (429). When no dir has a usable token
                 # we signal "No data" so the device idles instead of holding stale
                 # numbers until the CLI re-seeds it.
+                # The stored token lives ~8 h and only Claude Code renews it.
+                # Nudge it shortly before expiry, and again if a poll comes back
+                # 401 — so a desktop-app-only user never sees "No data".
+                exp = read_token_expiry()
+                if tk_mod.due(exp) and TOKEN_KEEPER.can_run():
+                    await keep_token_fresh("stored token expires soon" if exp and exp > now else "stored token expired")
                 payload, dead = await poll_active()
+                if payload is None and dead and await keep_token_fresh("token rejected (401)"):
+                    payload, dead = await poll_active()          # renewed → try once more right away
                 if payload is not None:
                     if await session.write_payload(payload):
                         last_poll = time.time()
