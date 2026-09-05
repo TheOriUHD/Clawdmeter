@@ -14,7 +14,7 @@ static ChimeConfig   cfg;
 static bool          ready   = false;
 static volatile bool playing = false;
 static es8311_handle_t es_handle = nullptr;   // kept so the volume can be set per play
-static int             vol_pct = 80;           // chime_set_volume(); applied when a clip starts
+static int             vol_pct = 40;           // chime_set_volume(); applied when a clip starts
 
 static bool es8311_setup(void) {
     es8311_handle_t es = es8311_create(0, cfg.es8311_addr);   // I2C port 0 (shared Wire bus)

@@ -31,7 +31,7 @@ static Settings S = {
     .auto_switch  = true,
     .alert_glow   = true,
     .alert_chime  = CHIME_ALL,
-    .volume       = 80,
+    .volume       = 40,
     .home_delay   = HOME_1M,
 };
 
