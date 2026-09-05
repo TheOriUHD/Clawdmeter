@@ -61,23 +61,57 @@ makes the device more functional while keeping its design language intact:
   daemon watches the battery between usage polls and pushes changes at once.
   About names the source. No cell and no host battery → nothing, instead of a
   permanently empty glyph.
-- **Serial QA hook.** `page splash|usage|settings|settings2|about` and `flip`
-  over the USB serial console drive the screens on boards without the
-  framebuffer screenshot (the C6 ports).
+- **Claude Code companion.** Claude Code's own hooks post every session event
+  (a prompt went in, a tool is running, a permission is pending, the turn
+  ended) to the daemon, which relays one compact state to the device. The
+  **status line stops making words up** and says what Claude is actually doing
+  (`Editing ui.cpp…`, `Bash: pio run…`, `Your turn…`); the whimsical spinner
+  words stay for plain thinking — they are Claude Code's own. A **Working page**
+  lives left of Usage: Clawd at the laptop while Claude works, the state line,
+  project and elapsed time, a `2 sessions` pill when several are live. With
+  **Auto-switch** on, the page slides in by itself when Claude starts working
+  and slides home once it has been quiet for a while.
+- **"Needs you" alerts.** A permission prompt, a question, a plan to approve
+  — or the end of a long turn — wakes the panel, slides to the Working page
+  (title **Waiting** / **Done**), starts a calm orange **glow** breathing
+  around the screen edge, has Clawd **jump and wave**, and plays a **soft
+  two-note chime** through the speaker (the C6 2.16's ES8311 is now wired up;
+  upstream left it silent). One tap acknowledges. Settings → **Companion**
+  picks the chime (Off / Needs you / All), toggles Auto-switch and Glow, and
+  has a **Preview** button so you can hear and see it.
+- **Trend page.** Right of Usage: the last **24 hours** of the session window
+  as a line, and **daily use** of the weekly quota as seven bars (today in
+  accent). The daemon keeps eight days of history in
+  `~/.config/claude-usage-monitor/history.json`.
+- **Serial QA hook.** `page splash|usage|working|trend|settings|settings2..4|about`,
+  `flip`, `cc <state> [label]`, `trend demo`, `alert [0|1]`, `preview`, `swipe
+  up|down` and `stats` over the USB serial console drive the screens on boards
+  without the framebuffer screenshot (the C6 ports).
 
-|      Weekly card, Fable face      |     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |     Settings 3 — Weekly card     |       Settings 4 — About      |
-| :-------------------------------: | :----------------------------------: | :-----------------------------------: | :------------------------------: | :---------------------------: |
-| ![Fable](screenshots/usage_fable.png) | ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![About](screenshots/about.png) |
+|      Weekly card, Fable face      |        Working — Claude at work        |      Waiting — Claude needs you       |            Trend             |
+| :-------------------------------: | :------------------------------------: | :-----------------------------------: | :--------------------------: |
+| ![Fable](screenshots/usage_fable.png) | ![Working](screenshots/working.png) | ![Waiting](screenshots/waiting.png) | ![Trend](screenshots/trend.png) |
+
+|     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |     Settings 3 — Weekly card     |     Settings 4 — Companion     |       Settings 5 — About      |
+| :----------------------------------: | :-----------------------------------: | :------------------------------: | :----------------------------: | :---------------------------: |
+| ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![Settings 4](screenshots/settings4.png) | ![About](screenshots/about.png) |
 
 Wire format additions: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
 scoped-model limit (`n` label ≤ 15 chars, `p` percent; absent key = no scoped
-limits, `0` is a real reading) — and `"hb": 85, "hc": 1` — the host's battery
-percent and charging flag (absent = no battery to report). Old firmware ignores
-the keys, old daemons simply never send them.
+limits, `0` is a real reading); `"hb": 85, "hc": 1` — the host's battery
+percent and plugged-in flag (absent = no battery to report);
+`"cc": {"n": 2, "a": 1, "s": 5, "l": "Permission: Bash", "p": "Clawdmeter",
+"e": 37, "m": "Fable 5.1", "g": 0, "h": "devbox"}` — the companion's headline
+session (`s`: 0 none · 1 idle · 2 thinking · 3 tool · 4 done · 5 needs you ·
+6 error · 7 compacting · 8 long turn done; `l` ≤ 24 chars, `e` seconds in that
+state); and `"tr": {"h": [24 hourly session maxima], "d": [7 daily weekly-use
+values]}` (`-1` = no data). A `"cc"`-only beat is applied without touching the
+usage numbers. Old firmware ignores the keys, old daemons simply never send
+them.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe up on Usage for the four Settings pages (clock & toggles, sliders & pairing, Weekly card, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Usage has a page on each side: swipe right for **Working** (what Claude Code is doing right now, once the companion hooks are installed) and left for **Trend** (24 hours / 7 days of history); page dots appear while you swipe. Swipe up for the five Settings pages (clock & toggles, sliders & pairing, Weekly card, Companion, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and shows the Working page; one tap acknowledges.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |
@@ -147,6 +181,44 @@ tail -F ~/Library/Logs/claude-usage-daemon.out.log                          # li
 launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # stop
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
 ```
+
+### Install the Claude Code companion hooks
+
+The installer offers this; to do it by hand on the Mac:
+
+```bash
+python3 companion/install-hooks.py
+```
+
+It merges 15 hooks into `~/.claude/settings.json` (nothing else in the file is
+touched; re-running replaces them, `--uninstall` removes them). Each hook is one
+`curl` line that posts the event to the daemon on `127.0.0.1:47393` in the
+background, so Claude Code never waits on it. New Claude Code sessions report
+from then on.
+
+For a machine you **ssh into** from Claude Code (or from a Claude client), run
+the same installer there:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheOriUHD/Clawdmeter/main/companion/install-hooks.sh | sh
+```
+
+and give that host a tunnel back to the Mac in `~/.ssh/config`:
+
+```text
+Host devbox
+    RemoteForward 47393 127.0.0.1:47393
+```
+
+Alternatively install it as a Claude Code plugin from this repo's marketplace:
+`claude plugin marketplace add TheOriUHD/Clawdmeter` then
+`claude plugin install clawdmeter-companion@clawdmeter`. On a trusted LAN
+(Tailscale…) you can instead set `companion_bind = 0.0.0.0` in the daemon
+config and point remote hooks at the Mac with `install-hooks.py --url
+http://<mac>:47393`.
+
+The daemon config has `companion = on|off`, `companion_port`, `companion_bind`
+and `trend = on|off`; see `daemon/config.example`.
 
 ## Linux installation
 

@@ -29,5 +29,12 @@ bool chime_init(const ChimeConfig& cfg);
 // or already playing.
 void chime_play(void);
 
+// Companion alert: a soft synthesized chime, generated on the fly (no PCM in
+// flash, no big buffer — a 1 KB block at a time from a fixed-point sine table,
+// so the single-core C6 barely notices). kind 0 = "needs you": two rising
+// marimba-like notes (E5 → A5); kind 1 = "done": one gentle note (C5). Quieter
+// than the reset bell on purpose. Non-blocking; no-op if not ready or busy.
+void chime_play_alert(int kind);
+
 // Currently a no-op (playback runs in its own task); kept for HAL symmetry.
 void chime_tick(void);

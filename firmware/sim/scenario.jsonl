@@ -11,3 +11,7 @@
 {"name":"plan without scoped limit","hold_ms":3000,"s":42.0,"sr":180,"w":33.0,"wr":7900,"st":"allowed","ok":true}
 {"name":"enterprise on pace","hold_ms":3000,"s":37.0,"sr":-1,"acct":"ent","tp":40,"pd":30,"rd":"Aug 15","st":"allowed","ok":true}
 {"name":"enterprise over pace","hold_ms":4000,"s":88.0,"sr":-1,"acct":"ent","tp":52,"pd":30,"rd":"Aug 15","st":"allowed","ok":true}
+# Companion ("cc") + Trend ("tr") — the Working page slides in on its own when Claude starts working (Auto-switch).
+{"name":"claude working (tool)","hold_ms":5000,"s":42.0,"sr":180,"w":33.0,"wr":7900,"ws":[{"n":"Fable","p":61}],"st":"allowed","ok":true,"t":1785474000,"tf":24,"tr":{"h":[-1,-1,-1,-1,-1,-1,2,5,12,30,48,62,71,55,40,58,77,84,66,42,30,21,15,38],"d":[6,11,4,0,14,9,5]},"cc":{"n":1,"a":0,"s":3,"l":"Editing ui.cpp","e":134,"p":"Clawdmeter","m":"Fable 5.1"}}
+{"name":"claude needs you (glow + chime)","hold_ms":6000,"s":42.0,"sr":180,"w":33.0,"wr":7900,"ws":[{"n":"Fable","p":61}],"st":"allowed","ok":true,"t":1785474000,"tf":24,"tr":{"h":[-1,-1,-1,-1,-1,-1,2,5,12,30,48,62,71,55,40,58,77,84,66,42,30,21,15,38],"d":[6,11,4,0,14,9,5]},"cc":{"n":2,"a":1,"s":5,"l":"Permission: Bash","e":3,"p":"Clawdmeter","m":"Fable 5.1"}}
+{"name":"claude done, your turn","hold_ms":4000,"s":42.0,"sr":180,"w":33.0,"wr":7900,"ws":[{"n":"Fable","p":61}],"st":"allowed","ok":true,"t":1785474000,"tf":24,"tr":{"h":[-1,-1,-1,-1,-1,-1,2,5,12,30,48,62,71,55,40,58,77,84,66,42,30,21,15,38],"d":[6,11,4,0,14,9,5]},"cc":{"n":1,"a":0,"s":4,"l":"Your turn","e":2,"p":"Clawdmeter"}}

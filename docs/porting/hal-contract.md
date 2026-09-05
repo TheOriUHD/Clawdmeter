@@ -85,3 +85,7 @@ to `compute_layout()` (please open a PR — others with that size benefit).
 The splash screen is fully responsive — `CELL` is computed as
 `min(width, height) / 20` so the 20×20 pixel-art creature fills the
 smaller display dimension and centers in the larger one.
+
+### Sound: companion alert
+
+`void sound_hal_play_alert(int kind);` — kind 0 = Claude needs you (two rising notes), 1 = a long turn finished. Boards with an ES8311 forward to `chime_play_alert()` (synthesized on the fly, no PCM); boards without a speaker no-op.
