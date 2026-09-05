@@ -51,12 +51,14 @@ makes the device more functional while keeping its design language intact:
 - **Clock is a device setting.** The daemon now always sends the time
   (`clock = auto` by default; `12`/`24` force a format, `off` never sends it),
   and the device decides whether to show it.
-- **The battery glyph shows your MacBook.** A USB-powered board has no cell of
-  its own (the PMU reports none), so the header glyph shows the board's battery
-  only when one is fitted and otherwise the *host's* battery, which the daemon
-  sends with every payload (`pmset -g batt` on macOS, `Win32_Battery` on
-  Windows; `host_battery = off` disables it). About names the source. No cell
-  and no host battery → no glyph, instead of a permanently empty one.
+- **A battery that means something.** The header battery is drawn by the
+  firmware — a wider outline with a proportional fill and the **percentage
+  inside** (red fill at ≤10%, accent while charging). When it's on: a board
+  with a LiPo shows its own cell; a USB-powered board (the PMU reports no cell)
+  shows the *host's* battery instead, which the daemon sends with every payload
+  (`pmset -g batt` on macOS, `Win32_Battery` on Windows; `host_battery = off`
+  disables it). About names the source. No cell and no host battery → nothing,
+  instead of a permanently empty glyph.
 - **Serial QA hook.** `page splash|usage|settings|settings2|about` and `flip`
   over the USB serial console drive the screens on boards without the
   framebuffer screenshot (the C6 ports).

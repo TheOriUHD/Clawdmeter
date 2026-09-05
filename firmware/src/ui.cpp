@@ -57,8 +57,12 @@ struct Layout {
     bool    small_icons;             // 40px logo + 24px battery (vs 80/48) on small screens
     int16_t title_nudge;             // title x-shift balancing the corner logo
     int16_t logo_y;                  // logo top edge
-    int16_t batt_y;                  // battery icon top edge
-    int16_t batt_w;                  // battery icon width, for position math
+    int16_t batt_y;                  // battery widget top edge
+    int16_t batt_w;                  // battery widget total width (body + nub), for position math
+    // Battery widget: an outline drawn by LVGL with a proportional fill and the
+    // percentage inside — wide enough for "100%" at batt_font.
+    int16_t batt_h, batt_nub_w, batt_nub_h, batt_border, batt_radius;
+    const lv_font_t* batt_font;
 
     // Weekly card faces: indicator dots on the reset row (right-aligned)
     int16_t face_dot_y;
@@ -128,8 +132,14 @@ static void compute_layout(const BoardCaps& c) {
     L.small_icons = false;
     L.title_nudge = 16;
     L.logo_y = L.title_y - 10;
-    L.batt_y = L.title_y;
-    L.batt_w = ICON_BATTERY_W;
+    L.batt_h = 28;                    // large + compact; centred where the 48 px glyph sat
+    L.batt_nub_w = 4;
+    L.batt_nub_h = 12;
+    L.batt_border = 2;
+    L.batt_radius = 7;
+    L.batt_font = &font_styrene_20;
+    L.batt_w = 66 + 2 + L.batt_nub_w;
+    L.batt_y = L.title_y + (48 - L.batt_h) / 2;
     L.pair_y1 = 40;
     L.pair_y2 = 120;
     L.pair_y3 = 160;
@@ -234,8 +244,14 @@ static void compute_layout(const BoardCaps& c) {
         L.small_icons = true;
         L.title_nudge = 8;
         L.logo_y = 2;
-        L.batt_y = 10;
-        L.batt_w = ICON_BATTERY_SMALL_W;
+        L.batt_h = 18;
+        L.batt_nub_w = 3;
+        L.batt_nub_h = 8;
+        L.batt_border = 2;
+        L.batt_radius = 4;
+        L.batt_font = &font_styrene_12;
+        L.batt_w = 44 + 2 + L.batt_nub_w;
+        L.batt_y = 10 + (24 - L.batt_h) / 2;
         L.face_dot_y = L.usage_reset_y + 6;
         L.dot_size = 5;
         L.dot_gap = 6;
@@ -466,10 +482,15 @@ static lv_indev_t* s_indev = nullptr;
 static uint32_t  last_gesture_ms = 0;
 #define GESTURE_CLICK_GUARD_MS 600
 
-// ---- Battery indicator (shared, on top) ----
-static lv_obj_t* battery_img;
+// ---- Battery widget (shared header chrome, on top) ----
+// Drawn, not a bitmap: outline + nub in the text colour, a fill proportional to
+// the level, and the percentage centred inside. Source and colour come from
+// resolve_battery(): neutral fill, red at ≤10%, accent while charging.
+static lv_obj_t* batt_root = nullptr;
+static lv_obj_t* batt_body = nullptr;
+static lv_obj_t* batt_fill = nullptr;
+static lv_obj_t* batt_lbl = nullptr;
 static lv_obj_t* logo_img;
-static lv_image_dsc_t battery_dscs[5];  // empty, low, medium, full, charging
 
 // ---- Live-data freshness → which usage sub-view to show ----
 // usage panels when data is flowing, an idle "Zzz" screen when the host is
@@ -716,20 +737,53 @@ static lv_obj_t* make_body_group(lv_obj_t* parent) {
     return make_group_sized(parent, 0, 0, L.scr_w, L.body_h);
 }
 
-static void init_battery_icons(void) {
-    if (L.small_icons) {
-        init_icon_dsc_rgb565a8(&battery_dscs[0], ICON_BATTERY_SMALL_W, ICON_BATTERY_SMALL_H, icon_battery_small_data);
-        init_icon_dsc_rgb565a8(&battery_dscs[1], ICON_BATTERY_LOW_SMALL_W, ICON_BATTERY_LOW_SMALL_H, icon_battery_low_small_data);
-        init_icon_dsc_rgb565a8(&battery_dscs[2], ICON_BATTERY_MEDIUM_SMALL_W, ICON_BATTERY_MEDIUM_SMALL_H, icon_battery_medium_small_data);
-        init_icon_dsc_rgb565a8(&battery_dscs[3], ICON_BATTERY_FULL_SMALL_W, ICON_BATTERY_FULL_SMALL_H, icon_battery_full_small_data);
-        init_icon_dsc_rgb565a8(&battery_dscs[4], ICON_BATTERY_CHARGING_SMALL_W, ICON_BATTERY_CHARGING_SMALL_H, icon_battery_charging_small_data);
-        return;
-    }
-    init_icon_dsc_rgb565a8(&battery_dscs[0], ICON_BATTERY_W, ICON_BATTERY_H, icon_battery_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[1], ICON_BATTERY_LOW_W, ICON_BATTERY_LOW_H, icon_battery_low_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[2], ICON_BATTERY_MEDIUM_W, ICON_BATTERY_MEDIUM_H, icon_battery_medium_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[3], ICON_BATTERY_FULL_W, ICON_BATTERY_FULL_H, icon_battery_full_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[4], ICON_BATTERY_CHARGING_W, ICON_BATTERY_CHARGING_H, icon_battery_charging_data);
+// The header battery: [ body with fill + "NN%" ][nub]
+static void make_battery_widget(lv_obj_t* scr) {
+    const int body_w = L.batt_w - 2 - L.batt_nub_w;
+    batt_root = make_group_sized(scr, L.scr_w - L.batt_w - L.margin, L.batt_y, L.batt_w, L.batt_h);
+    lv_obj_clear_flag(batt_root, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_body = lv_obj_create(batt_root);
+    lv_obj_set_pos(batt_body, 0, 0);
+    lv_obj_set_size(batt_body, body_w, L.batt_h);
+    lv_obj_set_style_bg_opa(batt_body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(batt_body, COL_TEXT, 0);
+    lv_obj_set_style_border_width(batt_body, L.batt_border, 0);
+    lv_obj_set_style_radius(batt_body, L.batt_radius, 0);
+    lv_obj_set_style_pad_all(batt_body, 0, 0);
+    lv_obj_clear_flag(batt_body, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(batt_body, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Fill sits inside the border with a 2 px inset so the outline stays crisp.
+    batt_fill = lv_obj_create(batt_body);
+    lv_obj_set_pos(batt_fill, 2, 2);
+    lv_obj_set_size(batt_fill, 2, L.batt_h - 2 * L.batt_border - 4);
+    lv_obj_set_style_radius(batt_fill, L.batt_radius - L.batt_border - 1, 0);
+    lv_obj_set_style_border_width(batt_fill, 0, 0);
+    lv_obj_set_style_pad_all(batt_fill, 0, 0);
+    lv_obj_set_style_bg_color(batt_fill, COL_DOT_OFF, 0);
+    lv_obj_set_style_bg_opa(batt_fill, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(batt_fill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(batt_fill, LV_OBJ_FLAG_SCROLLABLE);
+
+    batt_lbl = lv_label_create(batt_body);
+    lv_label_set_text(batt_lbl, "");
+    lv_obj_set_style_text_font(batt_lbl, L.batt_font, 0);
+    lv_obj_set_style_text_color(batt_lbl, COL_TEXT, 0);
+    lv_obj_center(batt_lbl);
+
+    lv_obj_t* nub = lv_obj_create(batt_root);
+    lv_obj_set_pos(nub, body_w + 2, (L.batt_h - L.batt_nub_h) / 2);
+    lv_obj_set_size(nub, L.batt_nub_w, L.batt_nub_h);
+    lv_obj_set_style_radius(nub, 2, 0);
+    lv_obj_set_style_border_width(nub, 0, 0);
+    lv_obj_set_style_pad_all(nub, 0, 0);
+    lv_obj_set_style_bg_color(nub, COL_TEXT, 0);
+    lv_obj_set_style_bg_opa(nub, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(nub, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(nub, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_add_flag(batt_root, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ======== Usage Screen ========
@@ -1125,7 +1179,7 @@ static void toggle_tile_cb(lv_event_t* e) {
     if (click_guarded()) return;
     const Settings& s = settings_get();
     switch ((int)(intptr_t)lv_event_get_user_data(e)) {
-    case TG_BATTERY: if (board_caps().has_battery) settings_set_show_battery(!s.show_battery); break;
+    case TG_BATTERY: settings_set_show_battery(!s.show_battery); break;
     case TG_MASCOT:  settings_set_show_mascot(!s.show_mascot); break;
     case TG_STATUS:  settings_set_show_status(!s.show_status); break;
     default: break;
@@ -1433,8 +1487,7 @@ static void refresh_settings_controls(bool animate) {
     const Settings& s = settings_get();
     set_clock_segment(s.clock, animate);
     render_clock_preview();
-    if (board_caps().has_battery) set_toggle(tg_battery, s.show_battery, "Shown", "Hidden", animate);
-    else                          set_toggle(tg_battery, false, "None", "None", false);
+    set_toggle(tg_battery, s.show_battery, "Shown", "Hidden", animate);
     set_toggle(tg_mascot, s.show_mascot, "Shown", "Hidden", animate);
     set_toggle(tg_status, s.show_status, "Shown", "Hidden", animate);
     lv_slider_set_value(sl_brightness, brightness_get_pct(), animate ? LV_ANIM_ON : LV_ANIM_OFF);
@@ -1504,8 +1557,6 @@ void ui_init(void) {
     if (L.small_icons) init_icon_dsc_rgb565a8(&logo_dsc, CLAWD_STILL_SMALL_W, CLAWD_STILL_SMALL_H, clawd_still_small_data);
     else               init_icon_dsc_rgb565a8(&logo_dsc, CLAWD_STILL_W, CLAWD_STILL_H, clawd_still_data);
 #endif
-    init_battery_icons();
-
     // Body viewport (clips the sliding surfaces), then the surfaces, then the
     // shared header title above them.
     body = make_group_sized(scr, 0, L.content_y, L.scr_w, L.body_h);
@@ -1542,15 +1593,9 @@ void ui_init(void) {
 #endif
     }
 
-    battery_img = lv_image_create(scr);
-    lv_image_set_src(battery_img, &battery_dscs[0]);
-    lv_obj_set_pos(battery_img, L.scr_w - L.batt_w - L.margin, L.batt_y);
-    // Boards without battery telemetry never show the indicator (per the HAL
-    // contract; previously every board drew the empty-battery glyph).
-    if (!board_caps().has_battery) {
-        lv_obj_del(battery_img);
-        battery_img = nullptr;
-    }
+    // Every board gets the widget: without a cell (or a PMU at all) it shows the
+    // host's battery when the daemon sends one, and nothing otherwise.
+    make_battery_widget(scr);
 }
 
 void ui_update(const UsageData* data) {
@@ -1683,7 +1728,7 @@ static bool data_fresh(void) {
 struct BattView { bool shown; bool host; int pct; bool charging; };
 static BattView resolve_battery(void) {
     BattView v = { false, false, -1, false };
-    if (!battery_img || !settings_get().show_battery) return v;
+    if (!batt_root || !settings_get().show_battery) return v;
     if (batt_pct_cached >= 0) {
         v.shown = true; v.pct = batt_pct_cached; v.charging = batt_charging_cached;
     } else if (host_batt_pct >= 0 && data_fresh()) {
@@ -1693,16 +1738,18 @@ static BattView resolve_battery(void) {
 }
 
 static void refresh_battery_glyph(void) {
-    if (!battery_img) return;
+    if (!batt_root) return;
     const BattView v = resolve_battery();
     if (v.shown) {
-        int idx;
-        if (v.charging)        idx = 4;
-        else if (v.pct <= 10)  idx = 0;
-        else if (v.pct <= 35)  idx = 1;
-        else if (v.pct <= 75)  idx = 2;
-        else                   idx = 3;
-        lv_image_set_src(battery_img, &battery_dscs[idx]);
+        const int inner_w = (L.batt_w - 2 - L.batt_nub_w) - 2 * L.batt_border - 4;
+        int fill_w = inner_w * v.pct / 100;
+        if (v.pct > 0 && fill_w < 3) fill_w = 3;
+        if (fill_w > inner_w) fill_w = inner_w;
+        lv_obj_set_width(batt_fill, fill_w > 0 ? fill_w : 1);
+        lv_obj_set_style_bg_opa(batt_fill, fill_w > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(batt_fill,
+            v.charging ? COL_ACCENT : (v.pct <= 10 ? COL_RED : COL_DOT_OFF), 0);
+        lv_label_set_text_fmt(batt_lbl, "%d%%", v.pct);
     }
     apply_header_visibility();
 }
@@ -1859,9 +1906,9 @@ static void apply_header_visibility(void) {
         if (on_splash) lv_obj_add_flag(lbl_title, LV_OBJ_FLAG_HIDDEN);
         else           lv_obj_clear_flag(lbl_title, LV_OBJ_FLAG_HIDDEN);
     }
-    if (battery_img) {
-        if (on_splash || !resolve_battery().shown) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-        else                                       lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    if (batt_root) {
+        if (on_splash || !resolve_battery().shown) lv_obj_add_flag(batt_root, LV_OBJ_FLAG_HIDDEN);
+        else                                       lv_obj_clear_flag(batt_root, LV_OBJ_FLAG_HIDDEN);
     }
     const bool mascot = !on_splash && s.show_mascot;
     splash_mascot_set_visible(mascot);
