@@ -157,6 +157,63 @@ def read_clock_setting() -> str:
     return "auto"
 
 
+def read_host_battery_setting() -> str:
+    """`host_battery` config option: on|off (default on)."""
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key.strip().lower() == "host_battery":
+                    val = val.strip().lower()
+                    if val in ("off", "on"):
+                        return val
+    except OSError:
+        pass
+    return "on"
+
+
+# Host battery for the device's header glyph (parity with the macOS daemon):
+# Win32_Battery via PowerShell/CIM. BatteryStatus 6–9 = charging variants,
+# 2 = on AC (charging or full). Desktops without a battery return nothing.
+def parse_win32_battery(text: str) -> tuple[int, bool] | None:
+    parts = (text or "").split()
+    if len(parts) < 2:
+        return None
+    try:
+        pct = max(0, min(100, int(parts[0])))
+        status = int(parts[1])
+    except ValueError:
+        return None
+    return pct, status in (2, 6, 7, 8, 9)
+
+
+def read_host_battery() -> tuple[int, bool] | None:
+    if sys.platform != "win32":
+        return None
+    cmd = ("$b = Get-CimInstance Win32_Battery | Select-Object -First 1; "
+           "if ($b) { \"$($b.EstimatedChargeRemaining) $($b.BatteryStatus)\" }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
+                             capture_output=True, text=True, timeout=8,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_win32_battery(out.stdout)
+
+
+def add_host_battery_fields(payload: dict) -> None:
+    if read_host_battery_setting() != "on":
+        return
+    hb = read_host_battery()
+    if hb is None:
+        return
+    payload["hb"] = hb[0]
+    payload["hc"] = 1 if hb[1] else 0
+
+
 def add_chime_field(payload: dict) -> None:
     """Add "c":1 to the payload when the config opts in, so the firmware may
     sound the session-reset chime. Omitted entirely when chime is off."""
@@ -314,6 +371,7 @@ async def poll_usage_endpoint(token: str) -> dict | None:
         return None
     add_chime_field(payload)
     add_clock_fields(payload)
+    add_host_battery_fields(payload)
     return payload
 
 
@@ -380,6 +438,7 @@ async def poll_api(token: str) -> dict | None:
         }
     add_chime_field(payload)   # adds "c":1 iff the config opts in
     add_clock_fields(payload)   # adds "t" + "tf" iff the config opts in
+    add_host_battery_fields(payload)
     return payload
 
 

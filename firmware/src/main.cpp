@@ -174,6 +174,8 @@ static bool parse_json(const char* json, UsageData* out) {
     out->time_pct = doc["tp"] | 0;
     out->period_days = doc["pd"] | 30;
     strlcpy(out->reset_date, doc["rd"] | "", sizeof(out->reset_date));
+    out->host_batt_pct = doc["hb"] | -1;   // the host's battery for the header glyph (absent = none)
+    out->host_batt_charging = (int)(doc["hc"] | 0) != 0;
     out->clock_epoch = doc["t"] | 0L;
     out->clock_fmt = doc["tf"] | 24;
     out->ok = doc["ok"] | false;
@@ -487,13 +489,14 @@ void loop() {
             ble_send_ack();
             // One line per payload so a serial log proves what the device saw
             // (boards without the framebuffer screenshot rely on this).
-            Serial.printf("usage: s=%d%% w=%d%% scoped=%d%s%s%s clock=%s free=%u\n",
+            Serial.printf("usage: s=%d%% w=%d%% scoped=%d%s%s%s clock=%s hostbatt=%d%s free=%u\n",
                 (int)(usage.session_pct + 0.5f), (int)(usage.weekly_pct + 0.5f),
                 usage.scoped_weekly_count,
                 usage.scoped_weekly_count ? " (" : "",
                 usage.scoped_weekly_count ? usage.scoped_weekly[0].name : "",
                 usage.scoped_weekly_count ? ")" : "",
                 usage.clock_epoch ? "yes" : "no",
+                usage.host_batt_pct, usage.host_batt_charging ? "+" : "",
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         } else {
             ble_send_nack();

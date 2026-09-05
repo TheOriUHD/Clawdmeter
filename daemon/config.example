@@ -32,3 +32,11 @@ chime = off
 #   24   = send the time flagged 24-hour  (e.g. 18:28)
 #   off  = never send the time; the device cannot show a clock at all
 clock = auto
+
+# Send this machine's battery level to the device. The Clawdmeter's header
+# battery glyph shows the board's own cell when one is fitted, otherwise the
+# host's battery (your MacBook's) — a USB-powered board has nothing of its own
+# to show. Desktops without a battery send nothing either way.
+#   on  = send it (default)
+#   off = never send it
+host_battery = on

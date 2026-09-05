@@ -51,6 +51,12 @@ makes the device more functional while keeping its design language intact:
 - **Clock is a device setting.** The daemon now always sends the time
   (`clock = auto` by default; `12`/`24` force a format, `off` never sends it),
   and the device decides whether to show it.
+- **The battery glyph shows your MacBook.** A USB-powered board has no cell of
+  its own (the PMU reports none), so the header glyph shows the board's battery
+  only when one is fitted and otherwise the *host's* battery, which the daemon
+  sends with every payload (`pmset -g batt` on macOS, `Win32_Battery` on
+  Windows; `host_battery = off` disables it). About names the source. No cell
+  and no host battery → no glyph, instead of a permanently empty one.
 - **Serial QA hook.** `page splash|usage|settings|settings2|about` and `flip`
   over the USB serial console drive the screens on boards without the
   framebuffer screenshot (the C6 ports).
@@ -59,10 +65,11 @@ makes the device more functional while keeping its design language intact:
 | :-------------------------------: | :----------------------------------: | :-----------------------------------: | :------------------------------: | :---------------------------: |
 | ![Fable](screenshots/usage_fable.png) | ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![About](screenshots/about.png) |
 
-Wire format addition: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
-scoped-model limit (`n` label ≤ 15 chars, `p` percent). Absent key = no scoped
-limits; `0` is a real reading. Old firmware ignores the key, old daemons simply
-never send it.
+Wire format additions: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
+scoped-model limit (`n` label ≤ 15 chars, `p` percent; absent key = no scoped
+limits, `0` is a real reading) — and `"hb": 85, "hc": 1` — the host's battery
+percent and charging flag (absent = no battery to report). Old firmware ignores
+the keys, old daemons simply never send them.
 
 ## Screens
 

@@ -25,6 +25,8 @@ struct UsageData {
     int time_pct;            // 0-100: fraction of billing period elapsed (Enterprise)
     int period_days;         // total billing period length in days (Enterprise)
     char reset_date[12];     // formatted reset date e.g. "Jul 1" (Enterprise)
+    int  host_batt_pct;      // the host machine's battery 0-100 ("hb"); -1 = not provided
+    bool host_batt_charging; // host battery charging ("hc")
     long clock_epoch;        // local wall-clock epoch (s) from daemon; 0 = not provided
     int  clock_fmt;          // 12 or 24 (hour format from daemon); defaults to 24
     bool ok;                 // data parse succeeded
