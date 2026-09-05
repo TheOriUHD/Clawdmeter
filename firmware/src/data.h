@@ -29,6 +29,50 @@ struct UsageData {
     bool host_batt_charging; // host battery charging ("hc")
     long clock_epoch;        // local wall-clock epoch (s) from daemon; 0 = not provided
     int  clock_fmt;          // 12 or 24 (hour format from daemon); defaults to 24
+    bool has_usage;          // payload carried the usage keys (a companion-only beat does not)
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };
+
+// ---- Companion: live Claude Code session state — the "cc" payload key ----
+// Claude Code hooks post every event to the daemon (daemon/companion.py), which
+// boils them down to the headline session's state. Codes mirror the daemon's.
+enum CompanionState : uint8_t {
+    CC_NONE = 0,      // no live session (or the companion is not installed)
+    CC_IDLE,          // a session is open, waiting for a prompt
+    CC_THINKING,      // Claude is composing / reasoning
+    CC_TOOL,          // Claude is running a tool (label says which)
+    CC_DONE,          // a short exchange ended — your turn, quietly
+    CC_ATTENTION,     // Claude needs you NOW: permission, a question, a plan to approve
+    CC_ERROR,         // the turn ended in an API error
+    CC_COMPACTING,    // context compaction in progress
+    CC_TURN_DONE,     // a long turn finished — your turn, worth a nudge
+    CC_STATE_COUNT,
+};
+#define CC_LABEL_MAX   24
+#define CC_PROJECT_MAX 16
+#define CC_MODEL_MAX   12
+struct CompanionData {
+    bool    present;                 // the payload carried "cc" (companion installed)
+    uint8_t state;                   // CompanionState of the headline session
+    uint8_t sessions;                // live sessions ("n")
+    uint8_t attention;               // sessions needing you ("a")
+    uint8_t agents;                  // subagents of the headline session ("g")
+    int     elapsed_s;               // seconds in `state` when the payload left the daemon ("e")
+    char    label[CC_LABEL_MAX + 1]; // "Editing ui.cpp", "Permission: Bash", …
+    char    project[CC_PROJECT_MAX + 1];
+    char    model[CC_MODEL_MAX + 1];
+    char    host[13];                // remote host name, empty when local
+};
+
+// ---- Trend: usage history for the Trend page — the "tr" payload key ----
+// 24 hourly session-window maxima (oldest first, current hour last) and 7 daily
+// weekly-quota consumption values (oldest first, today last). -1 = no data.
+#define TREND_HOURS 24
+#define TREND_DAYS  7
+struct TrendData {
+    bool   present;
+    int8_t hours[TREND_HOURS];
+    int8_t days[TREND_DAYS];
+};
+

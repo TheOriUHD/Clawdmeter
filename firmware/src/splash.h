@@ -41,3 +41,19 @@ void splash_mini_tick(void);
 lv_obj_t* splash_mascot_create(lv_obj_t *parent, int slot_x, int feet_y, int cell);
 void splash_mascot_tick(void);
 void splash_mascot_set_visible(bool v);
+
+// Actor: a second embedded creature, the Working page's mascot. Its canvas is
+// sized once for the largest of `names` at `cell` px per art cell (all art is
+// bottom-anchored, so the feet line is the canvas bottom). play() switches
+// animation — asking for the one already playing is a no-op unless `restart`.
+// Loop mode holds the animation's loop region until the next play()/stop();
+// once mode plays intro → loop → outro a single time, then holds the still
+// pose. Independent of the mini creature above (both may exist).
+lv_obj_t* splash_actor_create(lv_obj_t *parent, const char *const *names, int count, int cell);
+void splash_actor_play(const char *name, bool loop, bool restart);
+void splash_actor_stop(void);          // hold the still pose (frame 0 of "walking")
+void splash_actor_tick(void);
+bool splash_actor_is_idle(void);       // holding the still pose (a once-play finished)
+int  splash_actor_width(void);         // canvas px (for layout)
+int  splash_actor_height(void);
+

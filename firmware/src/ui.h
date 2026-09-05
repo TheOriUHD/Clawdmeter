@@ -37,3 +37,15 @@ void ui_show_settings_page(int page);
 // down to Usage) as if a finger had flicked it; ms overrides the snap time
 // (0 = default). Lets a serial session measure transition frame rates.
 void ui_debug_swipe(int dir, uint32_t ms);
+
+// Companion ("cc") and Trend ("tr") payload keys — applied independently of
+// the usage numbers (a companion beat may arrive before any usage data).
+void ui_companion_update(const CompanionData* cc);
+void ui_trend_update(const TrendData* tr);
+
+// Usage-level pages: 0 = Working (companion), 1 = Usage, 2 = Trend. Snaps.
+void ui_show_level_page(int page);
+
+// Run the full "needs you" alert once — glow, mascot, chime per the settings —
+// without a companion event (Settings → Companion → Preview; serial "alert").
+void ui_preview_alert(void);

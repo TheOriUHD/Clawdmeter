@@ -22,7 +22,9 @@
 #include "hal/imu_hal.h"
 #include "hal/sound_hal.h"
 
-static UsageData usage = {};
+static UsageData     usage = {};
+static CompanionData companion = {};
+static TrendData     trend = {};
 
 // ---- LVGL draw buffers (partial render mode) ----
 // PSRAM-equipped boards (S3) use two 40-line strips. PSRAM-free boards (the
@@ -142,14 +144,51 @@ static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     }
 }
 
-// Parse a JSON line into UsageData.
-static bool parse_json(const char* json, UsageData* out) {
+// Companion ("cc") and Trend ("tr") ride along on any payload — a companion
+// beat may even arrive alone, before the first usage numbers. Both are applied
+// independently of the usage keys (see loop()).
+static void parse_companion(JsonDocument& doc, CompanionData* cc, TrendData* tr) {
+    cc->present = doc["cc"].is<JsonObject>();
+    if (cc->present) {
+        JsonObject o = doc["cc"];
+        int st = o["s"] | 0;
+        cc->state = (st >= 0 && st < CC_STATE_COUNT) ? (uint8_t)st : (uint8_t)CC_NONE;
+        cc->sessions  = (uint8_t)(o["n"] | 0);
+        cc->attention = (uint8_t)(o["a"] | 0);
+        cc->agents    = (uint8_t)(o["g"] | 0);
+        cc->elapsed_s = o["e"] | 0;
+        strlcpy(cc->label,   o["l"] | "", sizeof(cc->label));
+        strlcpy(cc->project, o["p"] | "", sizeof(cc->project));
+        strlcpy(cc->model,   o["m"] | "", sizeof(cc->model));
+        strlcpy(cc->host,    o["h"] | "", sizeof(cc->host));
+    }
+    tr->present = doc["tr"].is<JsonObject>();
+    if (tr->present) {
+        for (int i = 0; i < TREND_HOURS; i++) tr->hours[i] = -1;
+        for (int i = 0; i < TREND_DAYS; i++)  tr->days[i] = -1;
+        int i = 0;
+        for (JsonVariant v : doc["tr"]["h"].as<JsonArray>()) {
+            if (i >= TREND_HOURS) break;
+            int x = v | -1; tr->hours[i++] = (int8_t)(x < -1 ? -1 : x > 100 ? 100 : x);
+        }
+        i = 0;
+        for (JsonVariant v : doc["tr"]["d"].as<JsonArray>()) {
+            if (i >= TREND_DAYS) break;
+            int x = v | -1; tr->days[i++] = (int8_t)(x < -1 ? -1 : x > 100 ? 100 : x);
+        }
+    }
+}
+
+// Parse a JSON line into UsageData (+ the companion/trend extras).
+static bool parse_json(const char* json, UsageData* out, CompanionData* cc, TrendData* tr) {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
     if (err) {
         Serial.printf("JSON parse error: %s\n", err.c_str());
         return false;
     }
+    parse_companion(doc, cc, tr);
+    out->has_usage = !doc["ok"].isNull();   // a companion-only beat has no usage keys at all
 
     out->session_pct = doc["s"] | 0.0f;
     out->session_reset_mins = doc["sr"] | -1;
@@ -233,6 +272,37 @@ static void check_serial_cmd() {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
+            // "alert [0|1]" plays the companion chime; "preview" runs the whole
+            // needs-you alert (glow + mascot + chime); "cc <state> [label]" fakes a
+            // companion payload (states: 0 none 1 idle 2 thinking 3 tool 4 done
+            // 5 needs-you 6 error 7 compacting 8 turn-done); "trend demo" fakes a
+            // week of history.
+            else if (strncmp(cmd_buf, "alert", 5) == 0) sound_hal_play_alert(atoi(cmd_buf + 5));
+            else if (strcmp(cmd_buf, "preview") == 0)   ui_preview_alert();
+            else if (strncmp(cmd_buf, "cc ", 3) == 0) {
+                CompanionData fake = {};
+                fake.present = true;
+                int st = atoi(cmd_buf + 3);
+                fake.state = (st >= 0 && st < CC_STATE_COUNT) ? (uint8_t)st : 0;
+                fake.sessions = fake.state ? 1 : 0;
+                fake.attention = (fake.state == CC_ATTENTION || fake.state == CC_TURN_DONE) ? 1 : 0;
+                const char* sp = strchr(cmd_buf + 3, ' ');
+                strlcpy(fake.label, sp ? sp + 1 : "Serial test", sizeof(fake.label));
+                strlcpy(fake.project, "Clawdmeter", sizeof(fake.project));
+                strlcpy(fake.model, "Fable 5.1", sizeof(fake.model));
+                ui_companion_update(&fake);
+                Serial.printf("cc -> state %d '%s'\n", fake.state, fake.label);
+            }
+            else if (strcmp(cmd_buf, "trend demo") == 0) {
+                TrendData fake = {};
+                fake.present = true;
+                static const int8_t H[TREND_HOURS] = { -1,-1,-1,-1,-1,-1,2,5,12,30,48,62,71,55,40,58,77,84,66,42,30,21,15,38 };
+                static const int8_t D[TREND_DAYS]  = { 6, 11, 4, 0, 14, 9, 5 };
+                memcpy(fake.hours, H, sizeof(H));
+                memcpy(fake.days, D, sizeof(D));
+                ui_trend_update(&fake);
+                Serial.println("trend -> demo data");
+            }
             // "page splash|usage|settings|settings2|about" and "flip" — drive
             // the screens over serial (QA on boards without the framebuffer
             // screenshot).
@@ -243,7 +313,10 @@ static void check_serial_cmd() {
                 else if (strcmp(p, "settings") == 0)  ui_show_settings_page(0);
                 else if (strcmp(p, "settings2") == 0) ui_show_settings_page(1);
                 else if (strcmp(p, "settings3") == 0) ui_show_settings_page(2);
+                else if (strcmp(p, "settings4") == 0) ui_show_settings_page(3);
                 else if (strcmp(p, "about") == 0)     ui_show_screen(SCREEN_ABOUT);
+                else if (strcmp(p, "working") == 0)   ui_show_level_page(0);
+                else if (strcmp(p, "trend") == 0)     ui_show_level_page(2);
                 Serial.printf("page -> %s\n", p);
             }
             else if (strcmp(cmd_buf, "flip") == 0) ui_flip_weekly_face();
@@ -392,6 +465,7 @@ void loop() {
     sound_hal_tick();
     splash_tick();
     splash_mascot_tick();
+    splash_actor_tick();
     // Rotation transition (blank + ramp) would fight the idle fade — skip
     // ticks while the panel is dark. A rotation that happens during sleep
     // is detected by the next tick after wake and ramped in then.
@@ -469,7 +543,18 @@ void loop() {
     check_serial_cmd();
 
     if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+        if (parse_json(ble_get_data(), &usage, &companion, &trend)) {
+            if (!usage.has_usage) {
+                // A companion-only beat: no usage numbers to apply.
+                if (companion.present) ui_companion_update(&companion);
+                if (trend.present)     ui_trend_update(&trend);
+                ble_send_ack();
+                Serial.printf("companion: state=%d n=%d '%s' free=%u\n", companion.state,
+                              companion.sessions, companion.label,
+                              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                delay(5);
+                return;
+            }
             int g_before = usage_rate_group();
             bool session_reset = usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();
@@ -486,10 +571,14 @@ void loop() {
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
+            // The extras after the numbers: the Trend page labels its days from
+            // the clock the same payload carries.
+            if (companion.present) ui_companion_update(&companion);
+            if (trend.present)     ui_trend_update(&trend);
             ble_send_ack();
             // One line per payload so a serial log proves what the device saw
             // (boards without the framebuffer screenshot rely on this).
-            Serial.printf("usage: s=%d%% w=%d%% scoped=%d%s%s%s clock=%s hostbatt=%d%s free=%u\n",
+            Serial.printf("usage: s=%d%% w=%d%% scoped=%d%s%s%s clock=%s hostbatt=%d%s cc=%d/%d tr=%d free=%u\n",
                 (int)(usage.session_pct + 0.5f), (int)(usage.weekly_pct + 0.5f),
                 usage.scoped_weekly_count,
                 usage.scoped_weekly_count ? " (" : "",
@@ -497,6 +586,7 @@ void loop() {
                 usage.scoped_weekly_count ? ")" : "",
                 usage.clock_epoch ? "yes" : "no",
                 usage.host_batt_pct, usage.host_batt_charging ? "+" : "",
+                companion.present ? companion.state : -1, companion.sessions, trend.present,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         } else {
             ble_send_nack();

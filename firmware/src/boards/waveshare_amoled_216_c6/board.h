@@ -41,6 +41,19 @@
 // ---- PMU ----
 #define AXP2101_ADDR         0x34
 
+// ---- Audio (ES8311 codec + speaker) ----
+// Pins from Waveshare's own 07_Audio_Test for this board ("C6_AMOLED_2_16" in
+// its codec_board config): the codec sits on the shared I2C bus at 0x18 and
+// has no GPIO-controlled power amp (pa: -1), so the shared chime engine runs
+// with a null amp hook. Upstream left this path unwired ("no buzzer").
+#define SND_I2S_MCLK         19
+#define SND_I2S_BCLK         20
+#define SND_I2S_WS           22     // LRCK
+#define SND_I2S_DOUT         23     // ESP → ES8311 (speaker)
+#define SND_I2S_DIN          21     // ES8311 → ESP (mic; unused, set for STD mode)
+#define SND_SAMPLE_RATE      44100
+#define SND_ES8311_ADDR      0x18
+
 // ---- Buttons ----
 // Three side-mounted buttons:
 //   BOOT (primary) — GPIO 9, sends Space (PTT) over BLE HID
@@ -57,3 +70,4 @@
 #define BOARD_HAS_IMU              1    // present + initialized for I2C bus health
 #define BOARD_HAS_BATTERY          1
 #define BOARD_HAS_IO_EXPANDER      0    // TCA9554 exists on board but only services audio
+#define BOARD_HAS_SOUND            1    // ES8311 + speaker, driven by the shared chime engine

@@ -14,6 +14,9 @@
 #define KEY_SLEEP   "slp"
 #define KEY_FLIP    "flp"
 #define KEY_FACE    "fac"
+#define KEY_AUTOSW  "asw"
+#define KEY_GLOW    "glw"
+#define KEY_CHIME   "chm"
 
 static Settings S = {
     .clock        = CLOCK_AUTO,
@@ -23,6 +26,9 @@ static Settings S = {
     .sleep        = SLEEP_30M,
     .face_flip    = FLIP_7S,
     .face_default = 0,
+    .auto_switch  = true,
+    .alert_glow   = true,
+    .alert_chime  = CHIME_ALL,
 };
 
 static const uint32_t FLIP_MS[FLIP_MODE_COUNT] = { 0, 3000, 5000, 7000, 10000, 15000, 30000 };
@@ -56,6 +62,9 @@ void settings_init(void) {
     uint8_t slp = p.getUChar(KEY_SLEEP,   0xFF);
     uint8_t flp = p.getUChar(KEY_FLIP,    0xFF);
     uint8_t fac = p.getUChar(KEY_FACE,    0xFF);
+    uint8_t asw = p.getUChar(KEY_AUTOSW,  0xFF);
+    uint8_t glw = p.getUChar(KEY_GLOW,    0xFF);
+    uint8_t chm = p.getUChar(KEY_CHIME,   0xFF);
     p.end();
 
     if (clk < CLOCK_MODE_COUNT) S.clock = clk;
@@ -65,11 +74,16 @@ void settings_init(void) {
     if (slp < SLEEP_MODE_COUNT) S.sleep = slp;
     if (flp < FLIP_MODE_COUNT)  S.face_flip = flp;
     if (fac != 0xFF && fac <= 4) S.face_default = fac;
+    if (asw != 0xFF)            S.auto_switch = asw != 0;
+    if (glw != 0xFF)            S.alert_glow  = glw != 0;
+    if (chm < CHIME_MODE_COUNT) S.alert_chime = chm;
 
     apply_sleep();
-    Serial.printf("Settings: clock=%s battery=%d mascot=%d status=%d sleep=%s flip=%s face=%u\n",
+    Serial.printf("Settings: clock=%s battery=%d mascot=%d status=%d sleep=%s flip=%s face=%u "
+                  "autoswitch=%d glow=%d chime=%s\n",
         settings_clock_label(S.clock), S.show_battery, S.show_mascot, S.show_status,
-        settings_sleep_label(S.sleep), settings_face_flip_label(S.face_flip), S.face_default);
+        settings_sleep_label(S.sleep), settings_face_flip_label(S.face_flip), S.face_default,
+        S.auto_switch, S.alert_glow, settings_alert_chime_label(S.alert_chime));
 }
 
 const Settings& settings_get(void) { return S; }
@@ -101,6 +115,24 @@ void settings_set_face_default(uint8_t face) {
     if (face > 4) face = 0;
     S.face_default = face;
     put_u8(KEY_FACE, face);
+}
+
+void settings_set_auto_switch(bool v) { S.auto_switch = v; put_u8(KEY_AUTOSW, v ? 1 : 0); }
+void settings_set_alert_glow(bool v)  { S.alert_glow  = v; put_u8(KEY_GLOW,   v ? 1 : 0); }
+
+void settings_set_alert_chime(uint8_t mode) {
+    if (mode >= CHIME_MODE_COUNT) mode = CHIME_ALL;
+    S.alert_chime = mode;
+    put_u8(KEY_CHIME, mode);
+}
+
+const char* settings_alert_chime_label(uint8_t mode) {
+    switch (mode) {
+    case CHIME_OFF:       return "Off";
+    case CHIME_NEEDS_YOU: return "Needs you";
+    case CHIME_ALL:       return "All";
+    default:              return "?";
+    }
 }
 
 uint32_t settings_face_flip_ms(void) {

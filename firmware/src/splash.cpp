@@ -156,6 +156,7 @@ static void anim_reset(const splash_anim_def_t *a) {
 }
 
 static const uint8_t* compose_stage(const splash_anim_def_t *a, uint16_t frame);
+static const splash_anim_def_t* anim_by_name(const char *n);
 static void render_frame(const uint8_t *cells, const uint16_t *palette);
 
 // Start walking toward `target` (stage x of the frame origin).
@@ -408,6 +409,115 @@ void splash_mini_tick(void) {
     mini_frame = (mini_frame + 1) % mini_anim->frame_count;
     mini_render();
 }
+
+// ─── Actor: the Working page's mascot ────────────────────────────────────────
+// Same idea as the mini creature, but switchable at runtime and sized for a
+// set of animations. RGB565 canvas over the black screen background, so no
+// alpha plane is needed; a frame repaints the whole (small) canvas, which
+// LVGL then flushes as one dirty rectangle.
+static lv_obj_t  *act_canvas = NULL;
+static uint16_t  *act_buf = NULL;
+static int        act_cell = 5;
+static int        act_w = 0, act_h = 0;         // canvas px
+static const splash_anim_def_t *act_anim = NULL;
+static uint16_t   act_frame = 0;
+static uint32_t   act_started = 0;
+static bool       act_loop = false;
+static bool       act_done = true;              // holding the still pose
+static bool       act_in_loop = false;
+
+static void act_render(void) {
+    if (!act_buf || !act_anim) return;
+    memset(act_buf, 0, (size_t)act_w * act_h * 2);           // COL_EMPTY (black)
+    const int aw = act_anim->w, ah = act_anim->h;
+    const int x0 = (act_w - aw * act_cell) / 2;               // centred horizontally
+    const int y0 = act_h - ah * act_cell;                     // feet on the canvas bottom
+    const uint8_t *cells = &act_anim->frames[(size_t)act_frame * aw * ah];
+    const uint16_t *pal = act_anim->palette;
+    for (int gy = 0; gy < ah; gy++) {
+        for (int gx = 0; gx < aw; gx++) {
+            uint8_t code = cells[gy * aw + gx];
+            if (!code) continue;
+            uint16_t color = (pal && code < SPLASH_PALETTE_SIZE) ? pal[code] : COL_EMPTY;
+            for (int dy = 0; dy < act_cell; dy++) {
+                uint16_t *dst = &act_buf[(y0 + gy * act_cell + dy) * act_w + x0 + gx * act_cell];
+                for (int dx = 0; dx < act_cell; dx++) dst[dx] = color;
+            }
+        }
+    }
+    if (act_canvas) lv_obj_invalidate(act_canvas);
+}
+
+lv_obj_t* splash_actor_create(lv_obj_t *parent, const char *const *names, int count, int cell) {
+    int maxw = 0, maxh = 0;
+    for (int i = 0; i < count; i++) {
+        const splash_anim_def_t *a = anim_by_name(names[i]);
+        if (!a) continue;
+        if (a->w > maxw) maxw = a->w;
+        if (a->h > maxh) maxh = a->h;
+    }
+    const splash_anim_def_t *still = anim_by_name("walking");
+    if (still) { if (still->w > maxw) maxw = still->w; if (still->h > maxh) maxh = still->h; }
+    if (!maxw || !maxh) return NULL;
+    act_cell = cell < 1 ? 1 : cell;
+    act_w = maxw * act_cell;
+    act_h = maxh * act_cell;
+#ifdef BOARD_HAS_PSRAM
+    const uint32_t caps = MALLOC_CAP_SPIRAM;
+#else
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+#endif
+    act_buf = (uint16_t*)heap_caps_malloc((size_t)act_w * act_h * 2, caps);
+    if (!act_buf) return NULL;
+    act_canvas = lv_canvas_create(parent);
+    lv_canvas_set_buffer(act_canvas, act_buf, act_w, act_h, LV_COLOR_FORMAT_RGB565);
+    lv_obj_clear_flag(act_canvas, LV_OBJ_FLAG_CLICKABLE);
+    splash_actor_stop();
+    return act_canvas;
+}
+
+void splash_actor_stop(void) {
+    act_anim = anim_by_name("walking");     // frame 0 == the official still pose
+    act_frame = 0;
+    act_loop = false;
+    act_done = true;
+    act_in_loop = false;
+    act_started = millis();
+    act_render();
+}
+
+void splash_actor_play(const char *name, bool loop, bool restart) {
+    const splash_anim_def_t *a = anim_by_name(name);
+    if (!a || !act_buf) return;
+    if (a == act_anim && !act_done && !restart) { act_loop = loop; return; }
+    act_anim = a;
+    act_frame = 0;
+    act_loop = loop;
+    act_done = false;
+    act_in_loop = false;
+    act_started = millis();
+    act_render();
+}
+
+void splash_actor_tick(void) {
+    if (!act_buf || !act_anim || act_done || act_anim->frame_count == 0) return;
+    const uint32_t now = millis();
+    if (now - act_started < act_anim->holds[act_frame]) return;
+    act_started = now;
+    uint16_t next = act_frame + 1;
+    if (act_loop && act_frame == act_anim->loop_end) next = act_anim->loop_start;
+    if (next >= act_anim->frame_count) {          // played through once
+        splash_actor_stop();
+        return;
+    }
+    act_frame = next;
+    act_in_loop = act_frame >= act_anim->loop_start && act_frame <= act_anim->loop_end;
+    act_render();
+}
+
+bool splash_actor_is_idle(void) { return act_done; }
+int  splash_actor_width(void)   { return act_w; }
+int  splash_actor_height(void)  { return act_h; }
 
 // ─── Corner mascot (usage screen) ────────────────────────────────────────────
 // The corner logo slot, alive: the still Clawd idles, occasionally does a

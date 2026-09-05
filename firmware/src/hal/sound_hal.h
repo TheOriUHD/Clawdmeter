@@ -12,3 +12,9 @@
 void sound_hal_init(void);
 void sound_hal_tick(void);
 void sound_hal_play_reset(void);
+
+// Companion alert: a short, soft synthesized chime (chime.cpp) for the moments
+// Claude needs you. kind 0 = "needs you" (two rising notes), kind 1 = "done"
+// (one gentle note). Non-blocking; a no-op on boards without a speaker.
+void sound_hal_play_alert(int kind);
+
