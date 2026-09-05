@@ -25,14 +25,18 @@ makes the device more functional while keeping its design language intact:
   change. Plans without one have a single face and the classic card, pixel for
   pixel. (A third full card doesn't fit a 480 px panel, and a shrunken row
   looked like an afterthought — faces keep every limit at full size.)
-- **Touch-first settings.** Swipe left on the Usage screen for two pages of
-  2×2 **tiles** — each tile is one setting and one big button (≈17×13 mm on the
-  2.16" panel); tap it to cycle the value, everything persists across reboots.
-  Page 1: Clock (Off / Auto / 12h / 24h) · Battery icon · Mascot · Status line.
-  Page 2: Brightness · Sleep after (5 min … Never) · Pairing (two taps forget
-  the bonded host and re-advertise) · About (board, firmware, Bluetooth state
-  and address, battery, free RAM, uptime). Dots at the bottom show the page;
-  swipe right to go back. A tap on the Usage screen still toggles the splash.
+- **Touch-first settings with real controls.** Swipe left on the Usage
+  screen (the screens slide) for three pages, every control sized for a finger
+  on the 39 mm panel and persisted across reboots:
+  page 1 — **Clock** as a segmented picker (Off / Auto / 12h / 24h, the accent
+  highlight glides to your choice, with a live preview of what the title will
+  show) plus **Battery icon** and **Mascot** as animated toggles;
+  page 2 — **Brightness** as a draggable slider (the panel follows your finger
+  live), **Sleep after** as a stepped slider (5 min … Never), **Status line**
+  toggle and the **Pairing** button (two taps forget the bonded host and
+  re-advertise); page 3 — **About** (board, firmware, Bluetooth state and
+  address, battery, free RAM, uptime). Dots show the page; swipe right to go
+  back. A tap on the Usage screen still toggles the splash.
 - **Token-free daemon.** The macOS and Windows daemons read the official
   `/api/oauth/usage` endpoint — the same data `claude /usage` renders — instead
   of spending a 1-token message per poll. A `429` benches the endpoint for 15
@@ -45,8 +49,8 @@ makes the device more functional while keeping its design language intact:
   over the USB serial console drive the screens on boards without the
   framebuffer screenshot (the C6 ports).
 
-|      Weekly card, Fable face      |          Settings (page 1)          |          Settings (page 2)           |            About             |
-| :-------------------------------: | :---------------------------------: | :----------------------------------: | :--------------------------: |
+|      Weekly card, Fable face      |     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |       Settings 3 — About      |
+| :-------------------------------: | :----------------------------------: | :-----------------------------------: | :---------------------------: |
 | ![Fable](screenshots/usage_fable.png) | ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![About](screenshots/about.png) |
 
 Wire format addition: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
@@ -56,7 +60,7 @@ never send it.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe left on Usage for the Settings tile pages (and on to About); swipe right to go back. On plans with a Fable limit, tap the Weekly card to flip between its faces.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe left on Usage for the three Settings pages (clock & toggles, sliders & pairing, About); swipe right to go back. On plans with a Fable limit, tap the Weekly card to flip between its faces.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |

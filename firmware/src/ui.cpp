@@ -63,13 +63,18 @@ struct Layout {
     int16_t face_dot_y;
     int16_t dot_size, dot_gap;
 
-    // Settings: 2×2 tile pages. Tiles are the buttons — sized for a fingertip
-    // on a 39 mm panel (≥ 13 mm tall), label on top, value large below.
-    int16_t tiles_bottom;            // bottom edge of the tile grid
+    // Settings pages. Tiles are the surfaces the controls sit on; every
+    // control is sized for a fingertip on a 39 mm panel.
+    int16_t tiles_bottom;            // bottom edge of the tile area
     int16_t tile_gap, tile_radius;
     int16_t tile_pad_x, tile_pad_y;
+    int16_t wide_tile_h;             // clock tile (segmented picker)
+    int16_t slider_tile_h;           // brightness / sleep tiles
     const lv_font_t* tile_label_font;
-    const lv_font_t* tile_value_font;
+    const lv_font_t* ctrl_font;      // control text: segments, toggle values, slider values
+    int16_t seg_h, seg_gap, seg_radius;
+    int16_t toggle_w, toggle_h, toggle_knob;
+    int16_t slider_h, slider_knob;
     int16_t dots_y;                  // page indicator dots (top edge)
 
     // About page (key/value rows + footer)
@@ -139,19 +144,24 @@ static void compute_layout(const BoardCaps& c) {
         L.face_dot_y = L.usage_reset_y + 13;   // centred on the reset line
         L.dot_size = 8;
         L.dot_gap = 10;
-        L.tiles_bottom = 432;                  // 2 rows of 160 px tiles from y=100
+        L.tiles_bottom = 432;
         L.tile_gap = 12;
         L.tile_radius = 10;
         L.tile_pad_x = 16;
         L.tile_pad_y = 14;
+        L.wide_tile_h = 160;
+        L.slider_tile_h = 100;
         L.tile_label_font = &font_styrene_20;
-        L.tile_value_font = &font_styrene_28;
+        L.ctrl_font = &font_styrene_24;
+        L.seg_h = 60;  L.seg_gap = 6;  L.seg_radius = 12;
+        L.toggle_w = 84; L.toggle_h = 40; L.toggle_knob = 32;
+        L.slider_h = 12; L.slider_knob = 28;
         L.dots_y = 446;
         L.about_row_h = 38;
         L.about_key_font  = &font_styrene_20;
         L.about_val_font  = &font_styrene_20;
         L.about_hint_font = &font_styrene_16;
-        L.about_hint_y = -22;
+        L.about_hint_y = -46;   // clear of the page dots
         L.bt_info_panel_h = 160;
         L.bt_reset_zone_h = 110;
         L.bt_title_font    = &font_tiempos_56;
@@ -174,14 +184,19 @@ static void compute_layout(const BoardCaps& c) {
         L.tile_radius = 10;
         L.tile_pad_x = 14;
         L.tile_pad_y = 12;
+        L.wide_tile_h = 150;
+        L.slider_tile_h = 90;
         L.tile_label_font = &font_styrene_16;
-        L.tile_value_font = &font_styrene_24;
+        L.ctrl_font = &font_styrene_20;
+        L.seg_h = 52;  L.seg_gap = 6;  L.seg_radius = 10;
+        L.toggle_w = 72; L.toggle_h = 34; L.toggle_knob = 26;
+        L.slider_h = 10; L.slider_knob = 24;
         L.dots_y = 428;
         L.about_row_h = 32;
         L.about_key_font  = &font_styrene_16;
         L.about_val_font  = &font_styrene_16;
         L.about_hint_font = &font_styrene_14;
-        L.about_hint_y = -18;
+        L.about_hint_y = -40;
         L.bt_info_panel_h = 140;
         L.bt_reset_zone_h = 90;
         L.bt_title_font    = &font_tiempos_34;
@@ -228,14 +243,19 @@ static void compute_layout(const BoardCaps& c) {
         L.tile_radius = 6;
         L.tile_pad_x = 8;
         L.tile_pad_y = 6;
+        L.wide_tile_h = 84;
+        L.slider_tile_h = 50;
         L.tile_label_font = &font_styrene_12;
-        L.tile_value_font = &font_styrene_16;
+        L.ctrl_font = &font_styrene_14;
+        L.seg_h = 30;  L.seg_gap = 4;  L.seg_radius = 6;
+        L.toggle_w = 42; L.toggle_h = 20; L.toggle_knob = 14;
+        L.slider_h = 6;  L.slider_knob = 14;
         L.dots_y = 229;
         L.about_row_h = 20;
         L.about_key_font  = &font_styrene_12;
         L.about_val_font  = &font_styrene_12;
         L.about_hint_font = &font_styrene_12;
-        L.about_hint_y = -6;
+        L.about_hint_y = -16;
         L.pair_y1 = 12;
         L.pair_y2 = 56;
         L.pair_y3 = 80;
@@ -316,34 +336,44 @@ static lv_obj_t* face_dots[MAX_SCOPED_WEEKLY + 1];
 #define FACE_AUTO_MS 7000
 #define FACE_HOLD_MS 20000                  // after a tap, keep the chosen face this long
 
-// ---- Settings: tile pages ----
-// Two 2×2 pages of tiles; the whole tile is the button and tapping cycles the
-// value. Page 1: Clock, Battery icon, Mascot, Status line. Page 2: Brightness,
-// Sleep after, Pairing (two taps forget the bonded host), About (opens the
-// About screen). Page dots at the bottom; swipe left/right pages.
+// ---- Settings: three swipeable pages of real controls ----
+//   Page 0  Clock (segmented picker, sliding highlight) · Battery icon · Mascot (toggles)
+//   Page 1  Brightness (slider, live preview) · Sleep after (stepped slider) ·
+//           Status line (toggle) · Pairing (button, two taps)
+//   Page 2  About (device info)
+// Pages slide horizontally on swipe; the terra-cotta accent is the one
+// "active" colour across every control so they read as a family.
 static lv_obj_t* settings_container = nullptr;
-enum SettingId {
-    SET_CLOCK, SET_BATTERY, SET_MASCOT, SET_STATUS,
-    SET_BRIGHTNESS, SET_SLEEP, SET_PAIRING, SET_ABOUT,
-    SET_COUNT,
-};
-static const char* const SET_LABELS[SET_COUNT] = {
-    "Clock", "Battery icon", "Mascot", "Status line",
-    "Brightness", "Sleep after", "Pairing", "About",
-};
-#define SET_TILES_PER_PAGE 4
-#define SET_PAGES ((SET_COUNT + SET_TILES_PER_PAGE - 1) / SET_TILES_PER_PAGE)
+#define SET_PAGES 3
+#define PAGE_ABOUT 2
 static lv_obj_t* settings_pages[SET_PAGES];
-static lv_obj_t* tile_value[SET_COUNT];
 static lv_obj_t* page_dots[SET_PAGES];
 static int       settings_page = 0;
+
+// Clock: segmented picker
+static lv_obj_t* seg_highlight = nullptr;
+static lv_obj_t* seg_labels[CLOCK_MODE_COUNT];
+static int16_t   seg_x[CLOCK_MODE_COUNT];
+static lv_obj_t* clock_preview = nullptr;
+
+// Toggles
+struct Toggle { lv_obj_t* track; lv_obj_t* knob; lv_obj_t* value; };
+static Toggle tg_battery, tg_mascot, tg_status;
+
+// Sliders
+static lv_obj_t* sl_brightness = nullptr;
+static lv_obj_t* lbl_brightness = nullptr;
+static lv_obj_t* sl_sleep = nullptr;
+static lv_obj_t* lbl_sleep = nullptr;
+
+// Pairing button
+static lv_obj_t* pair_button = nullptr;
 static uint32_t  pairing_confirm_ms = 0;   // >0 while "Confirm?" is armed
 static uint32_t  pairing_cleared_ms = 0;   // >0 while "Cleared" is shown
 #define PAIRING_CONFIRM_MS 4000
 #define PAIRING_CLEARED_MS 3000
 
-// ---- About page ----
-static lv_obj_t* about_container = nullptr;
+// About rows
 enum AboutRow {
     ABOUT_BOARD, ABOUT_FW, ABOUT_BLE, ABOUT_ADDR, ABOUT_BATTERY, ABOUT_RAM, ABOUT_UPTIME,
     ABOUT_COUNT,
@@ -353,11 +383,19 @@ static const char* const ABOUT_KEYS[ABOUT_COUNT] = {
 };
 static lv_obj_t* about_value[ABOUT_COUNT];
 static uint32_t  about_last_refresh_ms = 0;
+static uint32_t  preview_last_refresh_ms = 0;
 static int       batt_pct_cached = -1;
 static bool      batt_charging_cached = false;
 
+// ---- Motion ----
+// Page and screen changes slide (ease-out); toggles and the segment highlight
+// glide. Swipes are ignored while a slide is in flight.
+#define ANIM_PAGE_MS 220
+#define ANIM_CTRL_MS 180
+static bool transitioning = false;
+
 // ---- Gestures ----
-// Swipe left/right pages Usage → Settings → About and back; a tap still
+// Swipe left/right pages Usage → Settings 1 → 2 → About and back; a tap still
 // toggles the splash. LVGL reports the gesture mid-press and then ALSO sends
 // CLICKED on release, so clicks are ignored for a moment after any gesture.
 static uint32_t  last_gesture_ms = 0;
@@ -460,15 +498,67 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 // Forward decls — callbacks defined near ui_show_screen below
 static void global_click_cb(lv_event_t* e);
 static void gesture_cb(lv_event_t* e);
-static void settings_tile_cb(lv_event_t* e);
 static void weekly_click_cb(lv_event_t* e);
-static void refresh_settings_tiles(void);
-static void show_settings_page(int page);
+static void refresh_settings_controls(bool animate);
+static void show_settings_page(int page, int dir);
 static void refresh_about(void);
 static void apply_header_visibility(void);
 
 static bool click_guarded(void) {
-    return (lv_tick_get() - last_gesture_ms) < GESTURE_CLICK_GUARD_MS;
+    return transitioning || (lv_tick_get() - last_gesture_ms) < GESTURE_CLICK_GUARD_MS;
+}
+
+// ---- Motion helpers ----
+static void anim_x_exec(void* var, int32_t v) { lv_obj_set_x((lv_obj_t*)var, v); }
+
+// Glide `obj` to x=`to` (relative to its parent, plain positioning — never use
+// on objects placed with lv_obj_align, whose x is an alignment offset).
+static void animate_x(lv_obj_t* obj, int32_t to, uint32_t ms, lv_anim_completed_cb_t done) {
+    lv_anim_delete(obj, anim_x_exec);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, lv_obj_get_x(obj), to);
+    lv_anim_set_duration(&a, ms);
+    lv_anim_set_exec_cb(&a, anim_x_exec);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    if (done) lv_anim_set_completed_cb(&a, done);
+    lv_anim_start(&a);
+}
+
+static void slide_done_cb(lv_anim_t* a) {
+    lv_obj_t* out = (lv_obj_t*)a->var;
+    lv_obj_add_flag(out, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_x(out, 0);
+    transitioning = false;
+}
+
+// Slide sibling `out` off and `in` on. dir +1 = forward (content moves left),
+// -1 = back. Both objects must be full-width children of the same parent,
+// positioned at x=0 when at rest.
+static void slide(lv_obj_t* out, lv_obj_t* in, int dir, bool animate) {
+    if (out == in) return;
+    if (!animate || lv_obj_has_flag(out, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(out, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(out, 0);
+        lv_obj_set_x(in, 0);
+        lv_obj_clear_flag(in, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    transitioning = true;
+    lv_obj_set_x(in, dir * L.scr_w);
+    lv_obj_clear_flag(in, LV_OBJ_FLAG_HIDDEN);
+    animate_x(in, 0, ANIM_PAGE_MS, NULL);
+    animate_x(out, -dir * L.scr_w, ANIM_PAGE_MS, slide_done_cb);
+}
+
+// Kill any in-flight slide and put every slidable surface back at rest.
+static void settle_slides(void) {
+    lv_anim_delete(NULL, anim_x_exec);
+    transitioning = false;
+    lv_obj_set_x(usage_container, 0);
+    if (settings_container) lv_obj_set_x(settings_container, 0);
+    for (int i = 0; i < SET_PAGES; i++) if (settings_pages[i]) lv_obj_set_x(settings_pages[i], 0);
 }
 
 static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
@@ -512,7 +602,8 @@ static void init_icon_dsc_rgb565a8(lv_image_dsc_t* dsc, int w, int h, const uint
     dsc->data_size = w * h * 3;
 }
 
-// A label drawn as a rounded pill — the UI's labelling device (card names).
+// A label drawn as a rounded pill — the UI's labelling device (card names)
+// and, with an accent fill, its button.
 static lv_obj_t* make_pill_styled(lv_obj_t* parent, const char* text, const lv_font_t* font,
                                   int pad_x, int pad_y) {
     lv_obj_t* lbl = lv_label_create(parent);
@@ -547,18 +638,23 @@ static lv_obj_t* make_dot(lv_obj_t* parent) {
     return d;
 }
 
-// Full-screen transparent page root with the shared header title. Pages other
-// than Usage get their own so the header stays identical across pages while
-// the corner mascot + battery glyph (screen-level objects) persist.
-static lv_obj_t* make_page(lv_obj_t* scr, const char* title) {
-    lv_obj_t* page = lv_obj_create(scr);
-    lv_obj_set_size(page, L.scr_w, L.scr_h);
-    lv_obj_set_pos(page, 0, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(page, 0, 0);
-    lv_obj_set_style_pad_all(page, 0, 0);
-    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+// Full-screen transparent group (a page or a screen root).
+static lv_obj_t* make_group(lv_obj_t* parent) {
+    lv_obj_t* g = lv_obj_create(parent);
+    lv_obj_set_size(g, L.scr_w, L.scr_h);
+    lv_obj_set_pos(g, 0, 0);
+    lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g, 0, 0);
+    lv_obj_set_style_pad_all(g, 0, 0);
+    lv_obj_clear_flag(g, LV_OBJ_FLAG_SCROLLABLE);
+    return g;
+}
 
+// Full-screen page root with the shared header title. Pages other than Usage
+// get their own so the header stays identical across pages while the corner
+// mascot + battery glyph (screen-level objects) persist.
+static lv_obj_t* make_page(lv_obj_t* scr, const char* title) {
+    lv_obj_t* page = make_group(scr);
     lv_obj_t* t = lv_label_create(page);
     lv_label_set_text(t, title);
     lv_obj_set_style_text_font(t, L.title_font, 0);
@@ -720,13 +816,7 @@ static void build_idle_group(lv_obj_t* parent) {
 }
 
 static void init_usage_screen(lv_obj_t* scr) {
-    usage_container = lv_obj_create(scr);
-    lv_obj_set_size(usage_container, L.scr_w, L.scr_h);
-    lv_obj_set_pos(usage_container, 0, 0);
-    lv_obj_set_style_bg_opa(usage_container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(usage_container, 0, 0);
-    lv_obj_set_style_pad_all(usage_container, 0, 0);
-    lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_SCROLLABLE);
+    usage_container = make_group(scr);
     lv_obj_add_event_cb(usage_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     lbl_title = lv_label_create(usage_container);
@@ -739,13 +829,7 @@ static void init_usage_screen(lv_obj_t* scr) {
 
     // Usage panels (shown when connected) live in a transparent full-size group
     // so they can be toggled against the pairing hint as one unit.
-    usage_group = lv_obj_create(usage_container);
-    lv_obj_set_size(usage_group, L.scr_w, L.scr_h);
-    lv_obj_set_pos(usage_group, 0, 0);
-    lv_obj_set_style_bg_opa(usage_group, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(usage_group, 0, 0);
-    lv_obj_set_style_pad_all(usage_group, 0, 0);
-    lv_obj_clear_flag(usage_group, LV_OBJ_FLAG_SCROLLABLE);
+    usage_group = make_group(usage_container);
     lv_obj_add_flag(usage_group, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     panel_session = make_usage_panel(usage_group, L.content_y, "Current",
@@ -800,167 +884,232 @@ static void init_usage_screen(lv_obj_t* scr) {
 }
 
 // ======== Settings Screen ========
-//
-// 2×2 tiles per page. Each tile is one setting and one big button: tapping it
-// cycles the value and persists it (settings.cpp / brightness.cpp), then the
-// change is applied live. A pressed tile darkens for tactile feedback.
 
-static lv_obj_t* make_transparent_group(lv_obj_t* parent) {
-    lv_obj_t* g = lv_obj_create(parent);
-    lv_obj_set_size(g, L.scr_w, L.scr_h);
-    lv_obj_set_pos(g, 0, 0);
-    lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(g, 0, 0);
-    lv_obj_set_style_pad_all(g, 0, 0);
-    lv_obj_clear_flag(g, LV_OBJ_FLAG_SCROLLABLE);
-    return g;
+// A tile: the card surface a control sits on. Clickable tiles darken while
+// pressed (toggles, the pairing button); control tiles (sliders, the clock
+// picker) leave the taps to their controls.
+static lv_obj_t* make_tile(lv_obj_t* parent, int x, int y, int w, int h, bool clickable) {
+    lv_obj_t* t = lv_obj_create(parent);
+    lv_obj_set_pos(t, x, y);
+    lv_obj_set_size(t, w, h);
+    lv_obj_set_style_bg_color(t, COL_PANEL, 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(t, L.tile_radius, 0);
+    lv_obj_set_style_border_width(t, 0, 0);
+    lv_obj_set_style_pad_left(t, L.tile_pad_x, 0);
+    lv_obj_set_style_pad_right(t, L.tile_pad_x, 0);
+    lv_obj_set_style_pad_top(t, L.tile_pad_y, 0);
+    lv_obj_set_style_pad_bottom(t, L.tile_pad_y, 0);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    if (clickable) lv_obj_set_style_bg_color(t, COL_PRESSED, LV_STATE_PRESSED);
+    else           lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    return t;
 }
 
-static void build_settings_screen(lv_obj_t* scr) {
-    settings_container = make_page(scr, "Settings");
-
-    const int area_h = L.tiles_bottom - L.content_y;
-    const int tile_w = (L.content_w - L.tile_gap) / 2;
-    const int tile_h = (area_h - L.tile_gap) / 2;
-
-    for (int pg = 0; pg < SET_PAGES; pg++) {
-        lv_obj_t* page = make_transparent_group(settings_container);
-        settings_pages[pg] = page;
-        for (int k = 0; k < SET_TILES_PER_PAGE; k++) {
-            const int id = pg * SET_TILES_PER_PAGE + k;
-            if (id >= SET_COUNT) break;
-            const int col = k % 2, row = k / 2;
-
-            lv_obj_t* tile = lv_obj_create(page);
-            lv_obj_set_pos(tile, L.margin + col * (tile_w + L.tile_gap),
-                                 L.content_y + row * (tile_h + L.tile_gap));
-            lv_obj_set_size(tile, tile_w, tile_h);
-            lv_obj_set_style_bg_color(tile, COL_PANEL, 0);
-            lv_obj_set_style_bg_color(tile, COL_PRESSED, LV_STATE_PRESSED);
-            lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
-            lv_obj_set_style_radius(tile, L.tile_radius, 0);
-            lv_obj_set_style_border_width(tile, 0, 0);
-            lv_obj_set_style_pad_left(tile, L.tile_pad_x, 0);
-            lv_obj_set_style_pad_right(tile, L.tile_pad_x, 0);
-            lv_obj_set_style_pad_top(tile, L.tile_pad_y, 0);
-            lv_obj_set_style_pad_bottom(tile, L.tile_pad_y, 0);
-            lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_add_event_cb(tile, settings_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)id);
-
-            lv_obj_t* lbl = lv_label_create(tile);
-            lv_label_set_text(lbl, SET_LABELS[id]);
-            lv_obj_set_style_text_font(lbl, L.tile_label_font, 0);
-            lv_obj_set_style_text_color(lbl, COL_DIM, 0);
-            lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-
-            lv_obj_t* val = lv_label_create(tile);
-            lv_label_set_text(val, "");
-            lv_obj_set_style_text_font(val, L.tile_value_font, 0);
-            lv_obj_set_style_text_color(val, COL_TEXT, 0);
-            lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-            tile_value[id] = val;
-        }
-        if (pg > 0) lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Page indicator dots, centred under the grid.
-    const int total_w = SET_PAGES * L.dot_size + (SET_PAGES - 1) * L.dot_gap;
-    for (int pg = 0; pg < SET_PAGES; pg++) {
-        page_dots[pg] = make_dot(settings_container);
-        lv_obj_set_pos(page_dots[pg], (L.scr_w - total_w) / 2 + pg * (L.dot_size + L.dot_gap),
-                       L.dots_y);
-    }
-
-    show_settings_page(0);
-    refresh_settings_tiles();
-    lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+static lv_obj_t* tile_label(lv_obj_t* tile, const char* text) {
+    lv_obj_t* l = lv_label_create(tile);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, L.tile_label_font, 0);
+    lv_obj_set_style_text_color(l, COL_DIM, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
+    return l;
 }
 
-static void show_settings_page(int page) {
-    if (page < 0) page = 0;
-    if (page >= SET_PAGES) page = SET_PAGES - 1;
-    settings_page = page;
-    for (int pg = 0; pg < SET_PAGES; pg++) {
-        if (pg == page) lv_obj_clear_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
-        else            lv_obj_add_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(page_dots[pg], pg == page ? COL_TEXT : COL_DOT_OFF, 0);
-    }
+// Right-aligned control value on the tile's top row.
+static lv_obj_t* tile_value_label(lv_obj_t* tile) {
+    lv_obj_t* l = lv_label_create(tile);
+    lv_label_set_text(l, "");
+    lv_obj_set_style_text_font(l, L.ctrl_font, 0);
+    lv_obj_set_style_text_color(l, COL_TEXT, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_RIGHT, 0, -2);
+    return l;
 }
 
-// A tile's value reads bright when the feature is on and dim when it is off,
-// so the state is visible at a glance, not just by reading the word.
-static void set_tile_value(int id, const char* text, bool on) {
-    lv_label_set_text(tile_value[id], text);
-    lv_obj_set_style_text_color(tile_value[id], on ? COL_TEXT : COL_DIM, 0);
+// --- Toggle: a track with a gliding knob; the whole tile is the button ---
+static Toggle make_toggle(lv_obj_t* tile) {
+    Toggle t;
+    t.track = lv_obj_create(tile);
+    lv_obj_set_size(t.track, L.toggle_w, L.toggle_h);
+    lv_obj_align(t.track, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_radius(t.track, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(t.track, 0, 0);
+    lv_obj_set_style_pad_all(t.track, 0, 0);
+    lv_obj_set_style_bg_color(t.track, COL_BAR_BG, 0);
+    lv_obj_set_style_bg_opa(t.track, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(t.track, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(t.track, LV_OBJ_FLAG_SCROLLABLE);
+
+    t.knob = lv_obj_create(t.track);
+    lv_obj_set_size(t.knob, L.toggle_knob, L.toggle_knob);
+    lv_obj_set_pos(t.knob, (L.toggle_h - L.toggle_knob) / 2, (L.toggle_h - L.toggle_knob) / 2);
+    lv_obj_set_style_radius(t.knob, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(t.knob, 0, 0);
+    lv_obj_set_style_pad_all(t.knob, 0, 0);
+    lv_obj_set_style_bg_color(t.knob, COL_DIM, 0);
+    lv_obj_set_style_bg_opa(t.knob, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(t.knob, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(t.knob, LV_OBJ_FLAG_SCROLLABLE);
+
+    t.value = lv_label_create(tile);
+    lv_label_set_text(t.value, "");
+    lv_obj_set_style_text_font(t.value, L.ctrl_font, 0);
+    lv_obj_set_style_text_color(t.value, COL_TEXT, 0);
+    lv_obj_align_to(t.value, t.track, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    return t;
 }
 
-static void refresh_settings_tiles(void) {
-    if (!settings_container) return;
-    const Settings& s = settings_get();
-    set_tile_value(SET_CLOCK, settings_clock_label(s.clock), s.clock != CLOCK_OFF);
-    if (!board_caps().has_battery) set_tile_value(SET_BATTERY, "None", false);
-    else set_tile_value(SET_BATTERY, s.show_battery ? "Shown" : "Hidden", s.show_battery);
-    set_tile_value(SET_MASCOT, s.show_mascot ? "Shown" : "Hidden", s.show_mascot);
-    set_tile_value(SET_STATUS, s.show_status ? "Shown" : "Hidden", s.show_status);
-    set_tile_value(SET_BRIGHTNESS, brightness_label(brightness_get_index()), true);
-    set_tile_value(SET_SLEEP, settings_sleep_label(s.sleep), s.sleep != SLEEP_NEVER);
-    set_tile_value(SET_ABOUT, FW_VERSION, true);
-
-    const char* pair_text = pairing_cleared_ms ? "Cleared"
-                          : pairing_confirm_ms ? "Confirm?"
-                          : "Forget host";
-    lv_label_set_text(tile_value[SET_PAIRING], pair_text);
-    lv_obj_set_style_text_color(tile_value[SET_PAIRING],
-                                pairing_confirm_ms ? COL_ACCENT : COL_TEXT, 0);
+static void set_toggle(Toggle& t, bool on, const char* on_text, const char* off_text, bool animate) {
+    const int inset = (L.toggle_h - L.toggle_knob) / 2;
+    const int x = on ? L.toggle_w - L.toggle_knob - inset : inset;
+    if (animate) animate_x(t.knob, x, ANIM_CTRL_MS, NULL);
+    else         lv_obj_set_x(t.knob, x);
+    lv_obj_set_style_bg_color(t.track, on ? COL_ACCENT : COL_BAR_BG, 0);
+    lv_obj_set_style_bg_color(t.knob,  on ? COL_TEXT   : COL_DIM, 0);
+    lv_label_set_text(t.value, on ? on_text : off_text);
+    lv_obj_set_style_text_color(t.value, on ? COL_TEXT : COL_DIM, 0);
+    lv_obj_align_to(t.value, t.track, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
 }
 
-static void settings_tile_cb(lv_event_t* e) {
+// --- Slider: LVGL slider restyled — thin track, accent fill, big round knob,
+//     fat-finger hit area, and drags never bubble up as page swipes ---
+static lv_obj_t* make_slider(lv_obj_t* tile, int y, int w, int32_t min, int32_t max) {
+    lv_obj_t* s = lv_slider_create(tile);
+    lv_obj_set_pos(s, 0, y);
+    lv_obj_set_size(s, w, L.slider_h);
+    lv_slider_set_range(s, min, max);
+    lv_obj_set_style_bg_color(s, COL_BAR_BG, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s, COL_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s, COL_TEXT, LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s, (L.slider_knob - L.slider_h) / 2, LV_PART_KNOB);
+    lv_obj_set_ext_click_area(s, L.slider_knob);
+    lv_obj_clear_flag(s, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    return s;
+}
+
+// --- Clock picker: four segments with one sliding accent highlight ---
+static void seg_click_cb(lv_event_t* e) {
     if (click_guarded()) return;
-    const int id = (int)(intptr_t)lv_event_get_user_data(e);
-    const Settings& s = settings_get();
-    switch (id) {
-    case SET_CLOCK:
-        settings_set_clock((uint8_t)((s.clock + 1) % CLOCK_MODE_COUNT));
-        clock_last_min = -1;   // re-render the title on the next usage tick
-        break;
-    case SET_BATTERY:
-        if (board_caps().has_battery) settings_set_show_battery(!s.show_battery);
-        break;
-    case SET_MASCOT:     settings_set_show_mascot(!s.show_mascot); break;
-    case SET_STATUS:     settings_set_show_status(!s.show_status); break;
-    case SET_BRIGHTNESS: brightness_cycle(); break;
-    case SET_SLEEP:
-        settings_set_sleep((uint8_t)((s.sleep + 1) % SLEEP_MODE_COUNT));
-        break;
-    case SET_PAIRING:
-        // Two taps within PAIRING_CONFIRM_MS: forget the bonded host and
-        // re-advertise (same effect as the hold-power gesture).
-        if (pairing_cleared_ms) break;
-        if (pairing_confirm_ms) {
-            ble_clear_bonds();
-            pairing_confirm_ms = 0;
-            pairing_cleared_ms = lv_tick_get();
+    const int mode = (int)(intptr_t)lv_event_get_user_data(e);
+    settings_set_clock((uint8_t)mode);
+    clock_last_min = -1;
+    refresh_settings_controls(true);
+}
+
+static void render_clock_preview(void) {
+    if (!clock_preview) return;
+    const uint8_t mode = settings_get().clock;
+    char buf[16];
+    if (mode == CLOCK_OFF) {
+        strlcpy(buf, "Usage", sizeof(buf));
+    } else if (clock_base_epoch == 0) {
+        strlcpy(buf, "--:--", sizeof(buf));
+    } else {
+        const int fmt = (mode == CLOCK_12H) ? 12 : (mode == CLOCK_24H) ? 24 : clock_fmt;
+        time_t cur = (time_t)(clock_base_epoch + (lv_tick_get() - clock_base_ms) / 1000);
+        struct tm tmv;
+        gmtime_r(&cur, &tmv);
+        if (fmt == 12) {
+            int h12 = tmv.tm_hour % 12;
+            if (h12 == 0) h12 = 12;
+            snprintf(buf, sizeof(buf), "%d:%02d %s", h12, tmv.tm_min, tmv.tm_hour < 12 ? "AM" : "PM");
         } else {
-            pairing_confirm_ms = lv_tick_get();
+            snprintf(buf, sizeof(buf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
         }
-        break;
-    case SET_ABOUT:
-        ui_show_screen(SCREEN_ABOUT);
-        return;
+    }
+    lv_label_set_text(clock_preview, buf);
+    lv_obj_set_style_text_color(clock_preview, mode == CLOCK_OFF ? COL_DIM : COL_TEXT, 0);
+}
+
+static void set_clock_segment(int mode, bool animate) {
+    if (mode < 0 || mode >= CLOCK_MODE_COUNT) mode = 0;
+    if (animate) animate_x(seg_highlight, seg_x[mode], ANIM_PAGE_MS, NULL);
+    else         lv_obj_set_x(seg_highlight, seg_x[mode]);
+    for (int i = 0; i < CLOCK_MODE_COUNT; i++)
+        lv_obj_set_style_text_color(seg_labels[i], i == mode ? COL_TEXT : COL_DIM, 0);
+}
+
+// --- Slider + toggle + button handlers ---
+static void brightness_slider_cb(lv_event_t* e) {
+    const lv_event_code_t code = lv_event_get_code(e);
+    const int pct = (int)lv_slider_get_value(sl_brightness);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        brightness_preview_level(brightness_pct_to_level(pct));   // live while dragging
+        lv_label_set_text_fmt(lbl_brightness, "%d%%", pct);
+    } else if (code == LV_EVENT_RELEASED) {
+        brightness_set_level(brightness_pct_to_level(pct));       // persist once
+    }
+}
+
+static void sleep_slider_cb(lv_event_t* e) {
+    const lv_event_code_t code = lv_event_get_code(e);
+    const int idx = (int)lv_slider_get_value(sl_sleep);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_label_set_text(lbl_sleep, settings_sleep_label((uint8_t)idx));
+        lv_obj_set_style_text_color(lbl_sleep, idx == SLEEP_NEVER ? COL_DIM : COL_TEXT, 0);
+    } else if (code == LV_EVENT_RELEASED) {
+        settings_set_sleep((uint8_t)idx);
+    }
+}
+
+enum ToggleId { TG_BATTERY, TG_MASCOT, TG_STATUS };
+static void toggle_tile_cb(lv_event_t* e) {
+    if (click_guarded()) return;
+    const Settings& s = settings_get();
+    switch ((int)(intptr_t)lv_event_get_user_data(e)) {
+    case TG_BATTERY: if (board_caps().has_battery) settings_set_show_battery(!s.show_battery); break;
+    case TG_MASCOT:  settings_set_show_mascot(!s.show_mascot); break;
+    case TG_STATUS:  settings_set_show_status(!s.show_status); break;
     default: break;
     }
-    ui_refresh_settings();
+    refresh_settings_controls(true);
+    apply_header_visibility();
 }
 
-// ======== About Screen ========
+// Two taps within PAIRING_CONFIRM_MS: forget the bonded host and re-advertise
+// (same effect as the hold-power gesture).
+static void pairing_tile_cb(lv_event_t* e) {
+    (void)e;
+    if (click_guarded()) return;
+    if (pairing_cleared_ms) return;
+    if (pairing_confirm_ms) {
+        ble_clear_bonds();
+        pairing_confirm_ms = 0;
+        pairing_cleared_ms = lv_tick_get();
+    } else {
+        pairing_confirm_ms = lv_tick_get();
+    }
+    refresh_settings_controls(false);
+}
 
-static void build_about_screen(lv_obj_t* scr) {
-    about_container = make_page(scr, "About");
+static void render_pairing_button(void) {
+    if (!pair_button) return;
+    if (pairing_cleared_ms) {
+        lv_label_set_text(pair_button, "Cleared");
+        lv_obj_set_style_bg_color(pair_button, COL_BAR_BG, 0);
+        lv_obj_set_style_text_color(pair_button, COL_DIM, 0);
+    } else if (pairing_confirm_ms) {
+        lv_label_set_text(pair_button, "Confirm?");
+        lv_obj_set_style_bg_color(pair_button, COL_ACCENT, 0);
+        lv_obj_set_style_text_color(pair_button, COL_TEXT, 0);
+    } else {
+        lv_label_set_text(pair_button, "Forget host");
+        lv_obj_set_style_bg_color(pair_button, COL_BAR_BG, 0);
+        lv_obj_set_style_text_color(pair_button, COL_TEXT, 0);
+    }
+}
 
+static void build_about_page(lv_obj_t* page) {
     const int rows_h = ABOUT_COUNT * L.about_row_h;
-    lv_obj_t* panel = make_panel(about_container, L.margin, L.content_y, L.content_w,
+    lv_obj_t* panel = make_panel(page, L.margin, L.content_y, L.content_w,
                                  rows_h + 2 * L.panel_pad_y);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_CLICKABLE);
     for (int i = 0; i < ABOUT_COUNT; i++) {
         const int y = i * L.about_row_h;
         lv_obj_t* key = lv_label_create(panel);
@@ -975,25 +1124,160 @@ static void build_about_screen(lv_obj_t* scr) {
         lv_obj_set_style_text_color(about_value[i], COL_TEXT, 0);
         lv_obj_align(about_value[i], LV_ALIGN_TOP_RIGHT, 0, y);
     }
-
-    lv_obj_t* hint = lv_label_create(about_container);
-    lv_label_set_text(hint, "Swipe right to go back");
-    lv_obj_set_style_text_font(hint, L.about_hint_font, 0);
-    lv_obj_set_style_text_color(hint, COL_DIM, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, L.about_hint_y - L.about_row_h);
-
-    lv_obj_t* credit = lv_label_create(about_container);
+    lv_obj_t* credit = lv_label_create(page);
     lv_label_set_text(credit, "github.com/TheOriUHD/Clawdmeter");
     lv_obj_set_style_text_font(credit, L.about_hint_font, 0);
     lv_obj_set_style_text_color(credit, COL_DIM, 0);
     lv_obj_align(credit, LV_ALIGN_BOTTOM_MID, 0, L.about_hint_y);
+}
 
-    refresh_about();
-    lv_obj_add_flag(about_container, LV_OBJ_FLAG_HIDDEN);
+static void build_settings_screen(lv_obj_t* scr) {
+    settings_container = make_page(scr, "Settings");
+    for (int pg = 0; pg < SET_PAGES; pg++) settings_pages[pg] = make_group(settings_container);
+
+    const int half_w = (L.content_w - L.tile_gap) / 2;
+    const int inner_w = L.content_w - 2 * L.tile_pad_x;
+
+    // ---- Page 0: Clock picker (wide) + Battery icon / Mascot toggles ----
+    {
+        lv_obj_t* pg = settings_pages[0];
+        lv_obj_t* tile = make_tile(pg, L.margin, L.content_y, L.content_w, L.wide_tile_h, false);
+        tile_label(tile, "Clock");
+        clock_preview = tile_value_label(tile);
+
+        const int seg_w = (inner_w - (CLOCK_MODE_COUNT - 1) * L.seg_gap) / CLOCK_MODE_COUNT;
+        const int seg_y = L.wide_tile_h - 2 * L.tile_pad_y - L.seg_h;
+        seg_highlight = lv_obj_create(tile);
+        lv_obj_set_size(seg_highlight, seg_w, L.seg_h);
+        lv_obj_set_style_radius(seg_highlight, L.seg_radius, 0);
+        lv_obj_set_style_border_width(seg_highlight, 0, 0);
+        lv_obj_set_style_bg_color(seg_highlight, COL_ACCENT, 0);
+        lv_obj_set_style_bg_opa(seg_highlight, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(seg_highlight, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(seg_highlight, LV_OBJ_FLAG_SCROLLABLE);
+        static const char* const SEG_TEXT[CLOCK_MODE_COUNT] = { "Off", "Auto", "12h", "24h" };
+        for (int i = 0; i < CLOCK_MODE_COUNT; i++) {
+            seg_x[i] = i * (seg_w + L.seg_gap);
+            lv_obj_t* seg = lv_obj_create(tile);
+            lv_obj_set_pos(seg, seg_x[i], seg_y);
+            lv_obj_set_size(seg, seg_w, L.seg_h);
+            lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(seg, 0, 0);
+            lv_obj_set_style_pad_all(seg, 0, 0);
+            lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_event_cb(seg, seg_click_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+            seg_labels[i] = lv_label_create(seg);
+            lv_label_set_text(seg_labels[i], SEG_TEXT[i]);
+            lv_obj_set_style_text_font(seg_labels[i], L.ctrl_font, 0);
+            lv_obj_center(seg_labels[i]);
+        }
+        lv_obj_set_pos(seg_highlight, seg_x[0], seg_y);
+
+        const int row_y = L.content_y + L.wide_tile_h + L.tile_gap;
+        const int row_h = L.tiles_bottom - row_y;
+        lv_obj_t* t1 = make_tile(pg, L.margin, row_y, half_w, row_h, true);
+        tile_label(t1, "Battery icon");
+        tg_battery = make_toggle(t1);
+        lv_obj_add_event_cb(t1, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_BATTERY);
+
+        lv_obj_t* t2 = make_tile(pg, L.margin + half_w + L.tile_gap, row_y, half_w, row_h, true);
+        tile_label(t2, "Mascot");
+        tg_mascot = make_toggle(t2);
+        lv_obj_add_event_cb(t2, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_MASCOT);
+    }
+
+    // ---- Page 1: Brightness + Sleep sliders (wide), Status line toggle + Pairing ----
+    {
+        lv_obj_t* pg = settings_pages[1];
+        const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
+
+        lv_obj_t* tb = make_tile(pg, L.margin, L.content_y, L.content_w, L.slider_tile_h, false);
+        tile_label(tb, "Brightness");
+        lbl_brightness = tile_value_label(tb);
+        sl_brightness = make_slider(tb, slider_y, inner_w, 5, 100);
+        lv_obj_add_event_cb(sl_brightness, brightness_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(sl_brightness, brightness_slider_cb, LV_EVENT_RELEASED, NULL);
+
+        const int ts_y = L.content_y + L.slider_tile_h + L.tile_gap;
+        lv_obj_t* ts = make_tile(pg, L.margin, ts_y, L.content_w, L.slider_tile_h, false);
+        tile_label(ts, "Sleep after");
+        lbl_sleep = tile_value_label(ts);
+        sl_sleep = make_slider(ts, slider_y, inner_w, 0, SLEEP_MODE_COUNT - 1);
+        lv_obj_add_event_cb(sl_sleep, sleep_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(sl_sleep, sleep_slider_cb, LV_EVENT_RELEASED, NULL);
+
+        const int row_y = ts_y + L.slider_tile_h + L.tile_gap;
+        const int row_h = L.tiles_bottom - row_y;
+        lv_obj_t* t3 = make_tile(pg, L.margin, row_y, half_w, row_h, true);
+        tile_label(t3, "Status line");
+        tg_status = make_toggle(t3);
+        lv_obj_add_event_cb(t3, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_STATUS);
+
+        lv_obj_t* t4 = make_tile(pg, L.margin + half_w + L.tile_gap, row_y, half_w, row_h, true);
+        tile_label(t4, "Pairing");
+        pair_button = make_pill_styled(t4, "Forget host", L.ctrl_font, 18, 8);
+        lv_obj_align(pair_button, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+        lv_obj_add_event_cb(t4, pairing_tile_cb, LV_EVENT_CLICKED, NULL);
+    }
+
+    // ---- Page 2: About ----
+    build_about_page(settings_pages[PAGE_ABOUT]);
+
+    // Page indicator dots, centred under the tile area.
+    const int total_w = SET_PAGES * L.dot_size + (SET_PAGES - 1) * L.dot_gap;
+    for (int pg = 0; pg < SET_PAGES; pg++) {
+        page_dots[pg] = make_dot(settings_container);
+        lv_obj_set_pos(page_dots[pg], (L.scr_w - total_w) / 2 + pg * (L.dot_size + L.dot_gap), L.dots_y);
+    }
+
+    for (int pg = 1; pg < SET_PAGES; pg++) lv_obj_add_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
+    show_settings_page(0, 0);
+    refresh_settings_controls(false);
+    lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Show page `page`; dir ±1 slides from the current page, 0 snaps.
+static void show_settings_page(int page, int dir) {
+    if (page < 0) page = 0;
+    if (page >= SET_PAGES) page = SET_PAGES - 1;
+    const int prev = settings_page;
+    settings_page = page;
+    for (int pg = 0; pg < SET_PAGES; pg++)
+        lv_obj_set_style_bg_color(page_dots[pg], pg == page ? COL_TEXT : COL_DOT_OFF, 0);
+    if (dir != 0 && prev != page) {
+        slide(settings_pages[prev], settings_pages[page], dir, true);
+    } else {
+        for (int pg = 0; pg < SET_PAGES; pg++) {
+            lv_obj_set_x(settings_pages[pg], 0);
+            if (pg == page) lv_obj_clear_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
+            else            lv_obj_add_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (page == PAGE_ABOUT) {
+        refresh_about();
+        about_last_refresh_ms = lv_tick_get();
+    }
+}
+
+static void refresh_settings_controls(bool animate) {
+    if (!settings_container) return;
+    const Settings& s = settings_get();
+    set_clock_segment(s.clock, animate);
+    render_clock_preview();
+    if (board_caps().has_battery) set_toggle(tg_battery, s.show_battery, "Shown", "Hidden", animate);
+    else                          set_toggle(tg_battery, false, "None", "None", false);
+    set_toggle(tg_mascot, s.show_mascot, "Shown", "Hidden", animate);
+    set_toggle(tg_status, s.show_status, "Shown", "Hidden", animate);
+    lv_slider_set_value(sl_brightness, brightness_get_pct(), animate ? LV_ANIM_ON : LV_ANIM_OFF);
+    lv_label_set_text_fmt(lbl_brightness, "%d%%", brightness_get_pct());
+    lv_slider_set_value(sl_sleep, s.sleep, animate ? LV_ANIM_ON : LV_ANIM_OFF);
+    lv_label_set_text(lbl_sleep, settings_sleep_label(s.sleep));
+    lv_obj_set_style_text_color(lbl_sleep, s.sleep == SLEEP_NEVER ? COL_DIM : COL_TEXT, 0);
+    render_pairing_button();
 }
 
 static void refresh_about(void) {
-    if (!about_container) return;
+    if (!settings_container) return;
     char buf[48];
     lv_label_set_text(about_value[ABOUT_BOARD], board_caps().name);
     lv_label_set_text(about_value[ABOUT_FW], FW_VERSION);
@@ -1028,8 +1312,9 @@ void ui_init(void) {
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     // A screen that can scroll swallows horizontal drags as scroll attempts
-    // (the walking mascot briefly pokes past the edge on PSRAM boards). Pages
-    // never overflow, so disable it and let swipes reach the gesture handler.
+    // (the walking mascot briefly pokes past the edge on PSRAM boards, and
+    // sliding pages live off-screen mid-transition). Pages never need to
+    // scroll, so disable it and let swipes reach the gesture handler.
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(scr, gesture_cb, LV_EVENT_GESTURE, NULL);
 
@@ -1042,7 +1327,6 @@ void ui_init(void) {
 
     init_usage_screen(scr);
     build_settings_screen(scr);
-    build_about_screen(scr);
     splash_init(scr);
 
     if (splash_get_root()) {
@@ -1090,6 +1374,7 @@ void ui_update(const UsageData* data) {
     } else {                        // no time from the daemon → the title reverts to "Usage"
         clock_base_epoch = 0;
     }
+    if (current_screen == SCREEN_SETTINGS) render_clock_preview();   // keep the picker's preview live
 
     int s_pct = (int)(data->session_pct + 0.5f);
 
@@ -1232,22 +1517,23 @@ static void tick_title_clock(uint32_t now) {
 void ui_tick_anim(void) {
     const uint32_t now = lv_tick_get();
 
-    if (current_screen == SCREEN_ABOUT) {
-        if (now - about_last_refresh_ms >= 1000) {
+    if (current_screen == SCREEN_SETTINGS) {
+        if (settings_page == PAGE_ABOUT && now - about_last_refresh_ms >= 1000) {
             about_last_refresh_ms = now;
             refresh_about();
         }
-        return;
-    }
-    if (current_screen == SCREEN_SETTINGS) {
+        if (settings_page == 0 && now - preview_last_refresh_ms >= 10000) {
+            preview_last_refresh_ms = now;
+            render_clock_preview();
+        }
         // Expire the two-tap pairing confirmation / the "Cleared" notice.
         if (pairing_confirm_ms && now - pairing_confirm_ms >= PAIRING_CONFIRM_MS) {
             pairing_confirm_ms = 0;
-            refresh_settings_tiles();
+            render_pairing_button();
         }
         if (pairing_cleared_ms && now - pairing_cleared_ms >= PAIRING_CLEARED_MS) {
             pairing_cleared_ms = 0;
-            refresh_settings_tiles();
+            render_pairing_button();
         }
         return;
     }
@@ -1325,8 +1611,29 @@ static void global_click_cb(lv_event_t* e) {
     else                                  ui_show_screen(SCREEN_SPLASH);
 }
 
-// Horizontal swipes page between Usage → Settings → About (left) and back
-// (right); on the splash any swipe returns to the last page.
+// Animated Usage ⇄ Settings swap (gesture-driven). The two screen roots slide
+// as wholes — title included — while the corner mascot and battery glyph stay.
+static void enter_settings(int page, bool animate) {
+    pairing_confirm_ms = 0;
+    pairing_cleared_ms = 0;
+    refresh_settings_controls(false);
+    show_settings_page(page, 0);
+    slide(usage_container, settings_container, +1, animate);
+    prev_non_splash_screen = SCREEN_SETTINGS;
+    current_screen = SCREEN_SETTINGS;
+    preview_last_refresh_ms = lv_tick_get();
+    apply_header_visibility();
+}
+
+static void leave_settings(bool animate) {
+    slide(settings_container, usage_container, -1, animate);
+    prev_non_splash_screen = SCREEN_USAGE;
+    current_screen = SCREEN_USAGE;
+    apply_header_visibility();
+}
+
+// Horizontal swipes page between Usage → Settings 1 → 2 → About (left) and
+// back (right); on the splash any swipe returns to the last page.
 static void gesture_cb(lv_event_t* e) {
     (void)e;
     lv_indev_t* indev = lv_indev_active();
@@ -1334,48 +1641,50 @@ static void gesture_cb(lv_event_t* e) {
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir != LV_DIR_LEFT && dir != LV_DIR_RIGHT) return;
     last_gesture_ms = lv_tick_get();
+    if (transitioning) return;
     switch (current_screen) {
     case SCREEN_SPLASH:
         ui_show_screen(prev_non_splash_screen);
         break;
     case SCREEN_USAGE:
-        if (dir == LV_DIR_LEFT) ui_show_settings_page(0);
+        if (dir == LV_DIR_LEFT) enter_settings(0, true);
         break;
     case SCREEN_SETTINGS:
         if (dir == LV_DIR_LEFT) {
-            if (settings_page + 1 < SET_PAGES) show_settings_page(settings_page + 1);
-            else                               ui_show_screen(SCREEN_ABOUT);
+            if (settings_page + 1 < SET_PAGES) show_settings_page(settings_page + 1, +1);
         } else {
-            if (settings_page > 0) show_settings_page(settings_page - 1);
-            else                   ui_show_screen(SCREEN_USAGE);
+            if (settings_page > 0) show_settings_page(settings_page - 1, -1);
+            else                   leave_settings(true);
         }
-        break;
-    case SCREEN_ABOUT:
-        if (dir == LV_DIR_RIGHT) ui_show_settings_page(SET_PAGES - 1);
         break;
     default: break;
     }
 }
 
 void ui_show_screen(screen_t screen) {
+    settle_slides();
     lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
     if (settings_container) lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
-    if (about_container)    lv_obj_add_flag(about_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
-    case SCREEN_SPLASH:   splash_show(); break;
-    case SCREEN_USAGE:    lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_SPLASH:
+        splash_show();
+        break;
+    case SCREEN_USAGE:
+        lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+        break;
+    case SCREEN_ABOUT:                       // About lives on the last settings page
+        settings_page = PAGE_ABOUT;
+        screen = SCREEN_SETTINGS;
+        /* fall through */
     case SCREEN_SETTINGS:
         pairing_confirm_ms = 0;
         pairing_cleared_ms = 0;
-        refresh_settings_tiles();
+        refresh_settings_controls(false);
+        show_settings_page(settings_page, 0);
+        preview_last_refresh_ms = lv_tick_get();
         lv_obj_clear_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
-        break;
-    case SCREEN_ABOUT:
-        refresh_about();
-        about_last_refresh_ms = lv_tick_get();
-        lv_obj_clear_flag(about_container, LV_OBJ_FLAG_HIDDEN);
         break;
     default: break;
     }
@@ -1395,7 +1704,7 @@ screen_t ui_get_current_screen(void) {
 }
 
 void ui_refresh_settings(void) {
-    refresh_settings_tiles();
+    refresh_settings_controls(true);
     apply_header_visibility();
     clock_last_min = -1;   // title clock re-evaluates its mode on the next tick
 }
@@ -1405,7 +1714,9 @@ void ui_flip_weekly_face(void) {
 }
 
 void ui_show_settings_page(int page) {
-    show_settings_page(page);
+    if (page < 0) page = 0;
+    if (page >= SET_PAGES) page = SET_PAGES - 1;
+    settings_page = page;
     ui_show_screen(SCREEN_SETTINGS);
 }
 
