@@ -388,16 +388,48 @@ static int       batt_pct_cached = -1;
 static bool      batt_charging_cached = false;
 
 // ---- Motion ----
-// Page and screen changes slide (ease-out); toggles and the segment highlight
-// glide. Swipes are ignored while a slide is in flight.
-#define ANIM_PAGE_MS 220
+// Toggles and the segment highlight glide (ease-out); page/screen changes are
+// finger-driven (below) and snap with one shared animation.
+#define ANIM_SEG_MS  220
 #define ANIM_CTRL_MS 180
-static bool transitioning = false;
+static bool transitioning = false;         // a snap animation is in flight
 
-// ---- Gestures ----
-// Swipe left/right pages Usage → Settings 1 → 2 → About and back; a tap still
-// toggles the splash. LVGL reports the gesture mid-press and then ALSO sends
-// CLICKED on release, so clicks are ignored for a moment after any gesture.
+// ---- Swipe engine ----
+// One finger, tracked at the input-device level so it works no matter which
+// tile or card the press lands on (sliders excepted — they keep their drag).
+// Settings "lives below" Usage: on Usage, dragging UP pulls Settings in from
+// the bottom; on any Settings page, dragging DOWN pushes it away and Usage is
+// back — one gesture home from anywhere. Left/right drags page within
+// Settings. The surfaces follow the finger 1:1; on release a SINGLE animation
+// drives both leaving and arriving surface to the snap point in lockstep, so
+// they can never drift apart. A drag past a quarter of the span, or a flick,
+// commits; anything less springs back. LVGL still sends CLICKED on release,
+// so a drag arms the click guard the moment it starts.
+//
+// Surfaces are never hidden/unhidden mid-gesture (LVGL skips redrawing a
+// container that becomes visible while moving): the inactive screen is PARKED
+// one span off-screen (Usage above, Settings below; non-current settings pages
+// left/right of the current one) and only ever moved. HIDDEN is reserved for
+// the splash, which covers everything.
+enum DragMode { DRAG_NONE, DRAG_H, DRAG_V, DRAG_SPLASH, DRAG_IGNORE };
+static DragMode   drag_mode = DRAG_NONE;
+static lv_point_t drag_origin = {0, 0};
+static bool       drag_vertical = false;
+static int        drag_sign = 0;           // +1: finger moved left/up (content advances), -1: right/down
+static int32_t    drag_span = 0;           // screen width (H) or height (V)
+static int32_t    drag_off = 0;            // current displacement of the leaving surface
+static lv_obj_t*  drag_out = nullptr;      // surface leaving
+static lv_obj_t*  drag_in = nullptr;       // surface arriving (NULL = nothing there: rubber band)
+static int        drag_target_page = -1;   // H: page index of drag_in
+static bool       drag_commit = false;
+static bool       drag_tracking = false;   // finger is down; poll its position each tick
+static bool       header_suppressed = false; // mascot + battery hidden while screens slide vertically
+static lv_indev_t* s_indev = nullptr;
+#define DRAG_START_PX   14                 // finger travel before a press becomes a drag
+#define DRAG_COMMIT_DIV 4                  // commit past span/4 …
+#define DRAG_COMMIT_VEL 8                  // … or on a flick faster than this (px per indev tick)
+#define SNAP_MS         200                // full-span snap time; scaled by the remaining distance
+#define RUBBER_DIV      3                  // resistance when dragging where there is no page
 static uint32_t  last_gesture_ms = 0;
 #define GESTURE_CLICK_GUARD_MS 600
 
@@ -497,10 +529,12 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 
 // Forward decls — callbacks defined near ui_show_screen below
 static void global_click_cb(lv_event_t* e);
-static void gesture_cb(lv_event_t* e);
+static void indev_cb(lv_event_t* e);
+static void drag_tick(void);
 static void weekly_click_cb(lv_event_t* e);
 static void refresh_settings_controls(bool animate);
-static void show_settings_page(int page, int dir);
+static void show_settings_page(int page);
+static void update_page_dots(void);
 static void refresh_about(void);
 static void apply_header_visibility(void);
 
@@ -526,39 +560,30 @@ static void animate_x(lv_obj_t* obj, int32_t to, uint32_t ms, lv_anim_completed_
     lv_anim_start(&a);
 }
 
-static void slide_done_cb(lv_anim_t* a) {
-    lv_obj_t* out = (lv_obj_t*)a->var;
-    lv_obj_add_flag(out, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_x(out, 0);
-    transitioning = false;
-}
+static void drag_anim_exec(void* var, int32_t v);
 
-// Slide sibling `out` off and `in` on. dir +1 = forward (content moves left),
-// -1 = back. Both objects must be full-width children of the same parent,
-// positioned at x=0 when at rest.
-static void slide(lv_obj_t* out, lv_obj_t* in, int dir, bool animate) {
-    if (out == in) return;
-    if (!animate || lv_obj_has_flag(out, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_add_flag(out, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_x(out, 0);
-        lv_obj_set_x(in, 0);
-        lv_obj_clear_flag(in, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-    transitioning = true;
-    lv_obj_set_x(in, dir * L.scr_w);
-    lv_obj_clear_flag(in, LV_OBJ_FLAG_HIDDEN);
-    animate_x(in, 0, ANIM_PAGE_MS, NULL);
-    animate_x(out, -dir * L.scr_w, ANIM_PAGE_MS, slide_done_cb);
-}
-
-// Kill any in-flight slide and put every slidable surface back at rest.
+// Kill any in-flight motion and put every movable surface back at rest.
 static void settle_slides(void) {
     lv_anim_delete(NULL, anim_x_exec);
+    lv_anim_delete(&drag_off, drag_anim_exec);
     transitioning = false;
-    lv_obj_set_x(usage_container, 0);
-    if (settings_container) lv_obj_set_x(settings_container, 0);
-    for (int i = 0; i < SET_PAGES; i++) if (settings_pages[i]) lv_obj_set_x(settings_pages[i], 0);
+    drag_out = drag_in = nullptr;
+    drag_mode = DRAG_IGNORE;      // until the next press
+    header_suppressed = false;
+}
+
+// Park the two screens for `active`: the active one at the origin, the other a
+// full height away (Usage above Settings). Both stay visible.
+static void park_screens(screen_t active) {
+    lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+    if (settings_container) lv_obj_clear_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+    if (active == SCREEN_SETTINGS) {
+        lv_obj_set_pos(usage_container, 0, -L.scr_h);
+        if (settings_container) lv_obj_set_pos(settings_container, 0, 0);
+    } else {
+        lv_obj_set_pos(usage_container, 0, 0);
+        if (settings_container) lv_obj_set_pos(settings_container, 0, L.scr_h);
+    }
 }
 
 static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
@@ -1028,7 +1053,7 @@ static void render_clock_preview(void) {
 
 static void set_clock_segment(int mode, bool animate) {
     if (mode < 0 || mode >= CLOCK_MODE_COUNT) mode = 0;
-    if (animate) animate_x(seg_highlight, seg_x[mode], ANIM_PAGE_MS, NULL);
+    if (animate) animate_x(seg_highlight, seg_x[mode], ANIM_SEG_MS, NULL);
     else         lv_obj_set_x(seg_highlight, seg_x[mode]);
     for (int i = 0; i < CLOCK_MODE_COUNT; i++)
         lv_obj_set_style_text_color(seg_labels[i], i == mode ? COL_TEXT : COL_DIM, 0);
@@ -1230,29 +1255,25 @@ static void build_settings_screen(lv_obj_t* scr) {
         lv_obj_set_pos(page_dots[pg], (L.scr_w - total_w) / 2 + pg * (L.dot_size + L.dot_gap), L.dots_y);
     }
 
-    for (int pg = 1; pg < SET_PAGES; pg++) lv_obj_add_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
-    show_settings_page(0, 0);
+    show_settings_page(0);
     refresh_settings_controls(false);
-    lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);   // boot screen is the splash
 }
 
-// Show page `page`; dir ±1 slides from the current page, 0 snaps.
-static void show_settings_page(int page, int dir) {
+static void update_page_dots(void) {
+    for (int pg = 0; pg < SET_PAGES; pg++)
+        lv_obj_set_style_bg_color(page_dots[pg], pg == settings_page ? COL_TEXT : COL_DOT_OFF, 0);
+}
+
+// Snap straight to page `page` (finger-driven moves go through the swipe
+// engine). Other pages park one width to the left/right, still visible.
+static void show_settings_page(int page) {
     if (page < 0) page = 0;
     if (page >= SET_PAGES) page = SET_PAGES - 1;
-    const int prev = settings_page;
     settings_page = page;
+    update_page_dots();
     for (int pg = 0; pg < SET_PAGES; pg++)
-        lv_obj_set_style_bg_color(page_dots[pg], pg == page ? COL_TEXT : COL_DOT_OFF, 0);
-    if (dir != 0 && prev != page) {
-        slide(settings_pages[prev], settings_pages[page], dir, true);
-    } else {
-        for (int pg = 0; pg < SET_PAGES; pg++) {
-            lv_obj_set_x(settings_pages[pg], 0);
-            if (pg == page) lv_obj_clear_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
-            else            lv_obj_add_flag(settings_pages[pg], LV_OBJ_FLAG_HIDDEN);
-        }
-    }
+        lv_obj_set_x(settings_pages[pg], pg < page ? -L.scr_w : pg > page ? L.scr_w : 0);
     if (page == PAGE_ABOUT) {
         refresh_about();
         about_last_refresh_ms = lv_tick_get();
@@ -1311,12 +1332,14 @@ void ui_init(void) {
     lv_obj_t* scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    // A screen that can scroll swallows horizontal drags as scroll attempts
-    // (the walking mascot briefly pokes past the edge on PSRAM boards, and
-    // sliding pages live off-screen mid-transition). Pages never need to
-    // scroll, so disable it and let swipes reach the gesture handler.
+    // A screen that can scroll swallows drags as scroll attempts (the walking
+    // mascot briefly pokes past the edge on PSRAM boards, and dragged pages live
+    // off-screen mid-gesture). Pages never need to scroll, so disable it.
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(scr, gesture_cb, LV_EVENT_GESTURE, NULL);
+    // The swipe engine listens to the pointer device itself, so a drag that
+    // starts on any card, tile or empty space is handled the same way.
+    s_indev = lv_indev_get_next(NULL);
+    if (s_indev) lv_indev_add_event_cb(s_indev, indev_cb, LV_EVENT_ALL, NULL);
 
 #ifndef BOARD_HAS_PSRAM
     // Static corner mascot (see clawd_still.h) — the animated one needs PSRAM.
@@ -1516,6 +1539,12 @@ static void tick_title_clock(uint32_t now) {
 
 void ui_tick_anim(void) {
     const uint32_t now = lv_tick_get();
+    drag_tick();
+
+    // The Usage surface is parked, not destroyed, while Settings is up — keep
+    // its pair/idle/live sub-view current so a drag never reveals a stale one.
+    update_view_state();
+    if (view_state == 1) splash_mini_tick();   // the idle creature keeps breathing
 
     if (current_screen == SCREEN_SETTINGS) {
         if (settings_page == PAGE_ABOUT && now - about_last_refresh_ms >= 1000) {
@@ -1535,19 +1564,17 @@ void ui_tick_anim(void) {
             pairing_cleared_ms = 0;
             render_pairing_button();
         }
-        return;
+        // fall through: the Usage surface keeps its clock and ticker alive
+        // while parked, so it is never stale when a drag reveals it.
     }
-    if (current_screen != SCREEN_USAGE) return;
-
-    update_view_state();
-    if (view_state == 1) splash_mini_tick();   // animate the sleeping creature on the idle screen
+    if (current_screen == SCREEN_SPLASH) return;
 
     tick_title_clock(now);
 
     // Weekly card: advance the face on its own clock (a tap resets the clock
-    // with a longer hold, see weekly_click_cb).
-    if (cached_scoped_count > 0 && view_state == 2 && face_next_auto_ms &&
-        (int32_t)(now - face_next_auto_ms) >= 0) {
+    // with a longer hold, see weekly_click_cb). Only while actually on show.
+    if (current_screen == SCREEN_USAGE && cached_scoped_count > 0 && view_state == 2 &&
+        face_next_auto_ms && (int32_t)(now - face_next_auto_ms) >= 0) {
         flip_weekly_face(FACE_AUTO_MS);
     }
 
@@ -1587,7 +1614,7 @@ static screen_t prev_non_splash_screen = SCREEN_USAGE;
 // user's settings on every non-splash page; the splash hides all of them.
 static void apply_header_visibility(void) {
     const Settings& s = settings_get();
-    const bool on_splash = (current_screen == SCREEN_SPLASH);
+    const bool on_splash = (current_screen == SCREEN_SPLASH) || header_suppressed;
     if (battery_img) {
         if (on_splash || !s.show_battery) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
         else                              lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
@@ -1611,68 +1638,216 @@ static void global_click_cb(lv_event_t* e) {
     else                                  ui_show_screen(SCREEN_SPLASH);
 }
 
-// Animated Usage ⇄ Settings swap (gesture-driven). The two screen roots slide
-// as wholes — title included — while the corner mascot and battery glyph stay.
-static void enter_settings(int page, bool animate) {
-    pairing_confirm_ms = 0;
-    pairing_cleared_ms = 0;
-    refresh_settings_controls(false);
-    show_settings_page(page, 0);
-    slide(usage_container, settings_container, +1, animate);
-    prev_non_splash_screen = SCREEN_SETTINGS;
-    current_screen = SCREEN_SETTINGS;
-    preview_last_refresh_ms = lv_tick_get();
-    apply_header_visibility();
+// ======== Swipe engine ========
+
+static bool obj_is_slider(lv_obj_t* obj) {
+    while (obj) {
+        if (lv_obj_check_type(obj, &lv_slider_class)) return true;
+        obj = lv_obj_get_parent(obj);
+    }
+    return false;
 }
 
-static void leave_settings(bool animate) {
-    slide(settings_container, usage_container, -1, animate);
-    prev_non_splash_screen = SCREEN_USAGE;
-    current_screen = SCREEN_USAGE;
-    apply_header_visibility();
+// Place both surfaces for a displacement `off` of the leaving one; the arriving
+// one sits exactly one span behind it in the drag direction.
+static void set_drag_offset(int32_t off) {
+    drag_off = off;
+    if (!drag_out) return;
+    const int32_t in_off = off + drag_sign * drag_span;
+    if (drag_vertical) {
+        lv_obj_set_y(drag_out, off);
+        if (drag_in) lv_obj_set_y(drag_in, in_off);
+    } else {
+        lv_obj_set_x(drag_out, off);
+        if (drag_in) lv_obj_set_x(drag_in, in_off);
+    }
 }
 
-// Horizontal swipes page between Usage → Settings 1 → 2 → About (left) and
-// back (right); on the splash any swipe returns to the last page.
-static void gesture_cb(lv_event_t* e) {
-    (void)e;
+static void drag_anim_exec(void* var, int32_t v) { (void)var; set_drag_offset(v); }
+
+// The snap leaves the surfaces exactly where they park (leaving one a span
+// away, arriving one at the origin — or the reverse when it sprang back), so
+// only the bookkeeping remains.
+static void drag_anim_done(lv_anim_t* a) {
+    (void)a;
+    if (drag_out && drag_commit && drag_in) {
+        if (drag_vertical) {
+            const bool to_settings = (drag_in == settings_container);
+            current_screen = to_settings ? SCREEN_SETTINGS : SCREEN_USAGE;
+            prev_non_splash_screen = current_screen;
+            if (to_settings) preview_last_refresh_ms = lv_tick_get();
+            apply_header_visibility();
+        } else {
+            settings_page = drag_target_page;
+            update_page_dots();
+            if (settings_page == PAGE_ABOUT) {
+                refresh_about();
+                about_last_refresh_ms = lv_tick_get();
+            }
+        }
+    }
+    drag_out = drag_in = nullptr;
+    transitioning = false;
+    if (header_suppressed) {
+        header_suppressed = false;
+        apply_header_visibility();
+    }
+}
+
+// Animate from the current displacement to the snap point — one animation for
+// both surfaces. Duration scales with the distance left to travel.
+static void snap_drag(bool commit) {
+    drag_commit = commit && drag_in != nullptr;
+    const int32_t target = drag_commit ? -drag_sign * drag_span : 0;
+    const int32_t remaining = LV_ABS(target - drag_off);
+    uint32_t ms = drag_span > 0 ? (uint32_t)((int64_t)SNAP_MS * remaining / drag_span) : 0;
+    if (ms < 80) ms = 80;
+    transitioning = true;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &drag_off);
+    lv_anim_set_values(&a, drag_off, target);
+    lv_anim_set_duration(&a, ms);
+    lv_anim_set_exec_cb(&a, drag_anim_exec);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_completed_cb(&a, drag_anim_done);
+    lv_anim_start(&a);
+}
+
+// First movement past DRAG_START_PX: decide the axis and which surfaces move.
+static void begin_drag(int32_t dx, int32_t dy) {
+    last_gesture_ms = lv_tick_get();          // the release will also arrive as CLICKED — swallow it
+    drag_in = nullptr;
+    drag_out = nullptr;
+    drag_target_page = -1;
+    if (current_screen == SCREEN_SPLASH) { drag_mode = DRAG_SPLASH; return; }
+
+    const bool horizontal = LV_ABS(dx) >= LV_ABS(dy);
+    if (horizontal) {
+        if (current_screen != SCREEN_SETTINGS) { drag_mode = DRAG_IGNORE; return; }
+        drag_mode = DRAG_H;
+        drag_vertical = false;
+        drag_span = L.scr_w;
+        drag_sign = dx < 0 ? +1 : -1;
+        drag_out = settings_pages[settings_page];
+        const int target = settings_page + drag_sign;
+        if (target >= 0 && target < SET_PAGES) {
+            drag_target_page = target;
+            drag_in = settings_pages[target];      // already parked one width away
+        }
+    } else {
+        drag_mode = DRAG_V;
+        drag_vertical = true;
+        drag_span = L.scr_h;
+        drag_sign = dy < 0 ? +1 : -1;          // finger up → Settings rises from below
+        header_suppressed = true;              // chrome steps aside while screens move
+        apply_header_visibility();
+        if (current_screen == SCREEN_USAGE) {
+            drag_out = usage_container;
+            if (drag_sign > 0) {                    // Settings is parked below, ready
+                pairing_confirm_ms = 0;
+                pairing_cleared_ms = 0;
+                refresh_settings_controls(false);
+                show_settings_page(0);
+                drag_in = settings_container;
+            }
+        } else {                                    // Settings: down goes home
+            drag_out = settings_container;
+            if (drag_sign < 0) drag_in = usage_container;   // parked above
+        }
+    }
+    set_drag_offset(0);
+}
+
+// Follow the finger. With no surface to reveal (past the last page, or the
+// wrong way), the drag meets rubber resistance instead of moving fully.
+static void update_drag(int32_t dx, int32_t dy) {
+    const int32_t d = drag_vertical ? dy : dx;
+    int32_t off;
+    if (!drag_in) {
+        off = d / RUBBER_DIV;
+    } else if (drag_sign > 0) {
+        off = d > 0 ? d / RUBBER_DIV : (d < -drag_span ? -drag_span : d);
+    } else {
+        off = d < 0 ? d / RUBBER_DIV : (d > drag_span ? drag_span : d);
+    }
+    set_drag_offset(off);
+}
+
+static void end_drag(lv_indev_t* indev) {
+    if (drag_mode == DRAG_SPLASH) {
+        drag_mode = DRAG_NONE;
+        ui_show_screen(prev_non_splash_screen);
+        return;
+    }
+    if (drag_mode == DRAG_H || drag_mode == DRAG_V) {
+        bool commit = false;
+        if (drag_in) {
+            lv_point_t v;
+            lv_indev_get_vect(indev, &v);
+            const int32_t vel = drag_vertical ? v.y : v.x;
+            const int32_t moved = drag_sign > 0 ? -drag_off : drag_off;   // progress towards the target
+            const bool flick = drag_sign > 0 ? (vel < -DRAG_COMMIT_VEL) : (vel > DRAG_COMMIT_VEL);
+            commit = moved > drag_span / DRAG_COMMIT_DIV || (flick && moved > DRAG_START_PX);
+        }
+        snap_drag(commit);
+    }
+    drag_mode = DRAG_NONE;
+}
+
+// Input-device hook. LVGL forwards PRESSED and RELEASED to the device (not
+// PRESSING), so the press opens tracking, drag_tick() polls the finger every
+// UI tick, and the release ends it.
+static void indev_cb(lv_event_t* e) {
     lv_indev_t* indev = lv_indev_active();
     if (!indev) return;
-    const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (dir != LV_DIR_LEFT && dir != LV_DIR_RIGHT) return;
-    last_gesture_ms = lv_tick_get();
-    if (transitioning) return;
-    switch (current_screen) {
-    case SCREEN_SPLASH:
-        ui_show_screen(prev_non_splash_screen);
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+        lv_indev_get_point(indev, &drag_origin);
+        drag_mode = DRAG_NONE;
+        if (transitioning || obj_is_slider(lv_indev_get_active_obj())) drag_mode = DRAG_IGNORE;
+        drag_tracking = true;
         break;
-    case SCREEN_USAGE:
-        if (dir == LV_DIR_LEFT) enter_settings(0, true);
+    case LV_EVENT_RELEASED:
+        drag_tracking = false;
+        end_drag(indev);
         break;
-    case SCREEN_SETTINGS:
-        if (dir == LV_DIR_LEFT) {
-            if (settings_page + 1 < SET_PAGES) show_settings_page(settings_page + 1, +1);
-        } else {
-            if (settings_page > 0) show_settings_page(settings_page - 1, -1);
-            else                   leave_settings(true);
-        }
+    default:
         break;
-    default: break;
     }
+}
+
+// Called every UI tick while a finger is down: turn its travel into a drag.
+static void drag_tick(void) {
+    if (!drag_tracking || !s_indev) return;
+    if (drag_mode == DRAG_IGNORE || drag_mode == DRAG_SPLASH) return;
+    if (lv_indev_get_state(s_indev) != LV_INDEV_STATE_PRESSED) return;
+    lv_point_t p;
+    lv_indev_get_point(s_indev, &p);
+    const int32_t dx = p.x - drag_origin.x;
+    const int32_t dy = p.y - drag_origin.y;
+    if (drag_mode == DRAG_NONE) {
+        if (LV_ABS(dx) < DRAG_START_PX && LV_ABS(dy) < DRAG_START_PX) return;
+        begin_drag(dx, dy);
+        if (drag_mode != DRAG_H && drag_mode != DRAG_V) return;
+    }
+    update_drag(dx, dy);
 }
 
 void ui_show_screen(screen_t screen) {
     settle_slides();
-    lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
-    if (settings_container) lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
     case SCREEN_SPLASH:
+        // The splash covers the screen; keep the parked surfaces out of the
+        // render pass entirely (the C6 draws the splash straight to the panel).
+        lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+        if (settings_container) lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
         splash_show();
         break;
     case SCREEN_USAGE:
-        lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+        park_screens(SCREEN_USAGE);
         break;
     case SCREEN_ABOUT:                       // About lives on the last settings page
         settings_page = PAGE_ABOUT;
@@ -1682,9 +1857,9 @@ void ui_show_screen(screen_t screen) {
         pairing_confirm_ms = 0;
         pairing_cleared_ms = 0;
         refresh_settings_controls(false);
-        show_settings_page(settings_page, 0);
+        show_settings_page(settings_page);
         preview_last_refresh_ms = lv_tick_get();
-        lv_obj_clear_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+        park_screens(SCREEN_SETTINGS);
         break;
     default: break;
     }
