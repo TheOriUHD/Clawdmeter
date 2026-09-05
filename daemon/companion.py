@@ -400,8 +400,7 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
                 changed = companion.ingest(ev, host=hdr_host or remote)
                 writer.write(_response(200, "ok"))
                 if changed:
-                    log(f"Companion: {companion.describe()}")
-                    on_change()
+                    on_change()          # the beat's log line says what changed
             elif method == "GET" and path.rstrip("/") in ("/state", "/status"):
                 writer.write(_response(200, json.dumps(companion.summary() or {}), "application/json"))
             elif method == "GET" and path in ("", "/"):
