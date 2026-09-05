@@ -1026,9 +1026,11 @@ class Session:
         except asyncio.TimeoutError:
             log("Refresh subscription timed out; polling without it")
 
-    async def write_payload(self, payload: dict) -> bool:
+    async def write_payload(self, payload: dict, note: str | None = None) -> bool:
         data = shrink_payload(payload)
-        log(f"Sending: {data.decode()}")
+        # Companion beats can come several times a minute; log them as one
+        # short line instead of the full payload.
+        log(f"Sending: {data.decode()}" if note is None else f"Sending ({len(data)} B): {note}")
         try:
             # Write-without-response is capped at MTU-3 bytes; anything longer
             # (trend + companion extras) goes as a long write with response.
@@ -1227,7 +1229,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 _cc_dirty = False
                 last_cc_push = now
                 beat = companion_beat(last_payload)
-                if "cc" in beat and not await session.write_payload(beat):
+                if "cc" in beat and not await session.write_payload(beat, note=COMPANION.describe()):
                     _cc_dirty = True                # retry on the next tick
 
             try:
