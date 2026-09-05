@@ -177,8 +177,9 @@ def read_host_battery_setting() -> str:
 
 
 # Host battery for the device's header glyph (parity with the macOS daemon):
-# Win32_Battery via PowerShell/CIM. BatteryStatus 6–9 = charging variants,
-# 2 = on AC (charging or full). Desktops without a battery return nothing.
+# Win32_Battery via PowerShell/CIM. The flag means "plugged in": BatteryStatus
+# 2 = on AC, 3 = fully charged (on AC), 6–9 = charging variants; 1/4/5 =
+# discharging. Desktops without a battery return nothing.
 def parse_win32_battery(text: str) -> tuple[int, bool] | None:
     parts = (text or "").split()
     if len(parts) < 2:
@@ -188,7 +189,7 @@ def parse_win32_battery(text: str) -> tuple[int, bool] | None:
         status = int(parts[1])
     except ValueError:
         return None
-    return pct, status in (2, 6, 7, 8, 9)
+    return pct, status in (2, 3, 6, 7, 8, 9)
 
 
 def read_host_battery() -> tuple[int, bool] | None:

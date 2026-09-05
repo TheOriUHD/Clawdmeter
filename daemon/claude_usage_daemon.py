@@ -391,18 +391,23 @@ def read_host_battery_setting() -> str:
 # runs peripheral → central, hence it rides along in our own payload as
 # "hb" (percent) + "hc" (1 = charging). Desktop Macs simply omit the fields.
 def parse_pmset_batt(text: str) -> tuple[int, bool] | None:
-    """(percent, charging) from `pmset -g batt` output, or None when no battery.
+    """(percent, plugged_in) from `pmset -g batt` output, or None when no battery.
 
-    Sample line: ` -InternalBattery-0 (id=…)\t85%; discharging; 4:12 remaining present: true`
-    States seen: charging, discharging, charged, finishing charge,
-    "AC attached; not charging".
+    Sample: `Now drawing from 'AC Power'` then
+    ` -InternalBattery-0 (id=…)\t85%; charging; 1:03 remaining present: true`.
+    The flag is "plugged in", not "charging": macOS pauses charging while on
+    AC ("AC attached; not charging", "charged" at 100%) and the device should
+    still show the cable is in — that's what the user reacts to.
     """
-    m = re.search(r"(\d{1,3})%;\s*([^;\n]+)", text or "")
+    text = text or ""
+    m = re.search(r"(\d{1,3})%;\s*([^;\n]+)", text)
     if not m:
         return None
     pct = max(0, min(100, int(m.group(1))))
     state = m.group(2).strip().lower()
-    return pct, state in ("charging", "finishing charge")
+    plugged = ("'ac power'" in text.lower()) or \
+              state in ("charging", "finishing charge", "charged", "ac attached")
+    return pct, plugged
 
 
 def read_host_battery() -> tuple[int, bool] | None:
