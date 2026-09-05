@@ -186,43 +186,59 @@ launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # st
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
 ```
 
-### Install the Claude Code companion hooks
+### Companion: this Mac and every other machine
 
-The installer offers this; to do it by hand on the Mac:
+Think of two roles. The **bridge** is the computer with the Bluetooth link
+running the daemon (this Mac, or a Windows PC). **Workers** are wherever Claude
+Code actually runs: the bridge itself, a dev box you ssh into, a VM or a
+container that can only reach the bridge over the network. Every worker needs
+the hooks; only the bridge needs Bluetooth.
+
+**The bridge itself.** `install-mac.sh` offers it; by hand:
 
 ```bash
 python3 companion/install-hooks.py
 ```
 
-It merges 15 hooks into `~/.claude/settings.json` (nothing else in the file is
-touched; re-running replaces them, `--uninstall` removes them). Each hook is one
-`curl` line that posts the event to the daemon on `127.0.0.1:47393` in the
-background, so Claude Code never waits on it. New Claude Code sessions report
-from then on.
-
-For a machine you **ssh into** from Claude Code (or from a Claude client), run
-the same installer there:
+**Any other machine.** On the bridge, print the join command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TheOriUHD/Clawdmeter/main/companion/install-hooks.sh | sh
+companion/link
 ```
 
-and give that host a tunnel back to the Mac in `~/.ssh/config`:
+It lists one line per address the bridge has (LAN, Tailscale, `name.local`).
+Paste the one that machine can reach into it — Linux or macOS:
 
-```text
-Host devbox
-    RemoteForward 47393 127.0.0.1:47393
+```bash
+curl -fsSL http://192.168.1.23:47393/install/<token> | sh
 ```
 
-Alternatively install it as a Claude Code plugin from this repo's marketplace:
-`claude plugin marketplace add TheOriUHD/Clawdmeter` then
-`claude plugin install clawdmeter-companion@clawdmeter`. On a trusted LAN
-(Tailscale…) you can instead set `companion_bind = 0.0.0.0` in the daemon
-config and point remote hooks at the Mac with `install-hooks.py --url
-http://<mac>:47393`.
+Windows (PowerShell):
 
-The daemon config has `companion = on|off`, `companion_port`, `companion_bind`
-and `trend = on|off`; see `daemon/config.example`.
+```powershell
+irm http://192.168.1.23:47393/install.ps1/<token> | iex
+```
+
+The installer is served by the daemon itself with the bridge's address and a
+token baked in, merges 15 hooks into that machine's `~/.claude/settings.json`
+(keeping everything else, idempotent, backup written), and needs only `curl`
+plus `python3` or `node`; the PowerShell one needs nothing. New Claude Code
+sessions on that machine report to the bridge from then on; the Working page
+shows them as `devbox:project`. `... | sh -s -- --uninstall` removes them.
+Check from the worker with `curl -s http://<bridge>:47393/state/<token>`.
+
+How it stays safe: the daemon listens on every interface, but anything that is
+not the bridge itself must present the token (generated on first start into
+`~/.config/claude-usage-monitor/companion.token`; `companion_token = …` in the
+config to pick your own). Prefer loopback only? `companion_bind = 127.0.0.1`,
+and give ssh hosts `RemoteForward 47393 127.0.0.1:47393` instead.
+
+Two things to know: the *usage numbers* still come from the bridge's own
+Claude Code login (its Keychain token, refreshed whenever Claude Code or the
+desktop app runs there), and each hook is one background `curl` line with a
+2-second cap that never fails a tool call if the bridge is unreachable. The
+daemon config has `companion = on|off`, `companion_port`, `companion_bind`,
+`companion_token` and `trend = on|off`; see `daemon/config.example`.
 
 ## Linux installation
 

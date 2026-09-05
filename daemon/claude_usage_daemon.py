@@ -427,8 +427,17 @@ def read_companion_port() -> int:
 
 
 def read_companion_bind() -> str:
-    """`companion_bind`: 127.0.0.1 (default) or 0.0.0.0 for hooks arriving over the LAN."""
+    """`companion_bind`: 0.0.0.0 (default — other machines join over the network,
+    token-protected) or 127.0.0.1 to accept only this machine and SSH tunnels."""
     return _config_value("companion_bind") or cc_mod.COMPANION_BIND
+
+
+TOKEN_FILE = CONFIG_FILE.parent / "companion.token"
+
+
+def companion_token() -> str:
+    """The shared secret remote hooks present (config `companion_token`, else generated)."""
+    return cc_mod.load_or_create_token(TOKEN_FILE, _config_value("companion_token"))
 
 
 def read_trend_setting() -> str:
@@ -1168,7 +1177,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     session = Session(client)
     await session.setup_refresh_subscription()
 
-    global _cc_dirty
+    global _cc_dirty, _wake
+    _wake = asyncio.Event()                     # per connection: wakes the loop on refresh / hook events
     last_poll = 0.0
     used_successfully = False
     last_payload: dict | None = None            # last usage payload that reached the device
@@ -1267,15 +1277,18 @@ async def main() -> None:
     log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
-    global _wake, HISTORY
-    _wake = asyncio.Event()
+    global HISTORY
     HISTORY = trend_mod.History(HISTORY_FILE)
     if HISTORY.samples:
         log(f"Trend history: {len(HISTORY.samples)} samples in {HISTORY_FILE}")
     cc_server = None
     if read_companion_setting() == "on":
+        token = companion_token()
         cc_server = await cc_mod.start_companion_server(
-            COMPANION, _companion_changed, read_companion_bind(), read_companion_port(), log=log)
+            COMPANION, _companion_changed, read_companion_bind(), read_companion_port(), log=log, token=token)
+        if cc_server is not None:
+            for line in cc_mod.join_text(read_companion_port(), token).splitlines():
+                log("  " + line if line else "")
     else:
         log("Companion listener off (config: companion = off)")
 
@@ -1318,6 +1331,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "link":
+        # `companion/link` → the one-liners another machine runs to join this bridge.
+        print(cc_mod.join_text(read_companion_port(), companion_token()))
+        sys.exit(0)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

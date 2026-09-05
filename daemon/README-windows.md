@@ -222,6 +222,40 @@ launched.
 
 ---
 
+## Claude Code companion (this fork)
+
+The Windows daemon is a full **bridge**: it listens for Claude Code hook events
+and relays the live state (thinking / running a tool / needs you / done) to the
+device, which turns it into the Working page, the status line and the
+needs-you alert.
+
+**Claude Code on this PC.** Install the hooks once (Python is already required
+for the daemon; Claude Code on Windows runs hooks through Git Bash, which ships
+the `curl` the hook line uses):
+
+```powershell
+python companion\install-hooks.py
+```
+
+**Claude Code on another machine** (a Linux box, a VM, a Mac). On this PC:
+
+```powershell
+python daemon\claude_usage_daemon_windows.py link
+```
+
+It prints one line per address this PC has; paste the reachable one into the
+other machine — `curl -fsSL http://<pc>:47393/install/<token> | sh` on
+Linux/macOS, `irm http://<pc>:47393/install.ps1/<token> | iex` on another
+Windows box. The installer comes from the daemon itself with the address and
+token baked in. Windows Defender Firewall asks once whether Python may accept
+incoming connections — allow it on private networks, or the join fails.
+
+Config keys (`%LOCALAPPDATA%\Clawdmeter\config`): `companion = on|off`,
+`companion_port = 47393`, `companion_bind = 0.0.0.0` (`127.0.0.1` for this PC
+only), `companion_token = …` (else generated into `companion.token` next to the
+config), `trend = on|off` (usage history for the device's Trend page, kept in
+`history.json`).
+
 ## What is NOT covered here
 
 - PyInstaller / one-file `.exe` packaging — v2

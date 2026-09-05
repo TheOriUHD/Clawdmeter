@@ -5,13 +5,15 @@ Merges companion/hooks.json into ~/.claude/settings.json (or
 $CLAUDE_CONFIG_DIR/settings.json), keeping every hook you already have. Safe to
 re-run: earlier Clawdmeter entries are replaced, nothing else is touched.
 
-    python3 install-hooks.py                # this machine talks to 127.0.0.1:47393
-    python3 install-hooks.py --url http://mac.local:47393   # a remote box reaching the Mac directly
+    python3 install-hooks.py                # this machine talks to its own daemon on 127.0.0.1:47393
     python3 install-hooks.py --uninstall
 
-Over SSH the default is right: add `RemoteForward 47393 127.0.0.1:47393` to the
-host's entry in ~/.ssh/config and the hook on the remote machine reaches the
-daemon on your Mac through the tunnel.
+For OTHER machines you normally don't need this file: run `companion/link` on
+the bridge (the computer with the daemon) and paste the printed one-liner into
+the other machine — it fetches an installer from the daemon itself with the
+address and token baked in. This script does the same by hand:
+
+    python3 install-hooks.py --url http://192.168.1.23:47393 --token <token>
 """
 
 from __future__ import annotations
@@ -33,16 +35,19 @@ def settings_path() -> Path:
     return base / "settings.json"
 
 
-def load_hooks_fragment(url: str | None) -> dict:
+def load_hooks_fragment(url: str | None, token: str | None = None) -> dict:
+    """The hooks to install, with the bridge URL and (for other machines) the token baked in."""
     here = Path(__file__).resolve().parent
     frag = json.loads((here / "hooks.json").read_text())["hooks"]
-    if url and url.rstrip("/") != DEFAULT_URL:
-        target = url.rstrip("/")
-        for groups in frag.values():
-            for g in groups:
-                for h in g["hooks"]:
-                    h["command"] = h["command"].replace(
-                        "${CLAWDMETER_URL:-" + DEFAULT_URL + "}", "${CLAWDMETER_URL:-" + target + "}")
+    target = (url or DEFAULT_URL).rstrip("/")
+    auth = f" -H 'X-Clawdmeter-Token: {token}'" if token else ""
+    for groups in frag.values():
+        for g in groups:
+            for h in g["hooks"]:
+                cmd = h["command"].replace("${CLAWDMETER_URL:-" + DEFAULT_URL + "}", "${CLAWDMETER_URL:-" + target + "}")
+                if auth:
+                    cmd = cmd.replace(" --data-binary @-", auth + " --data-binary @-", 1)
+                h["command"] = cmd
     return frag
 
 
@@ -81,6 +86,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", help=f"daemon URL the hooks post to (default {DEFAULT_URL}; "
                                   "CLAWDMETER_URL in the environment overrides at run time)")
+    ap.add_argument("--token", help="bridge token for a daemon on another machine (see `companion link`)")
     ap.add_argument("--settings", type=Path, help="settings.json to edit (default: Claude Code's user settings)")
     ap.add_argument("--uninstall", action="store_true", help="remove the Clawdmeter hooks")
     args = ap.parse_args()
@@ -97,7 +103,7 @@ def main() -> int:
             print(f"error: {path} does not hold a JSON object", file=sys.stderr)
             return 1
 
-    fragment = None if args.uninstall else load_hooks_fragment(args.url)
+    fragment = None if args.uninstall else load_hooks_fragment(args.url, args.token)
     merged = merge(settings, fragment)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
