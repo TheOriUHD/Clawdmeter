@@ -29,6 +29,12 @@ bool chime_init(const ChimeConfig& cfg);
 // or already playing.
 void chime_play(void);
 
+// Playback loudness for both clips, 0..100. Linear in dB on the codec: 0 → -30 dB,
+// 100 → 0 dB DAC gain (the analog stage after it is fixed by the board). The
+// driver's own 0..100 "volume" is a raw register scale on which 46 meant -37 dB
+// — the reason the first alerts were inaudible.
+void chime_set_volume(int pct);
+
 // Companion alert: a soft synthesized chime, generated on the fly (no PCM in
 // flash, no big buffer — a 1 KB block at a time from a fixed-point sine table,
 // so the single-core C6 barely notices). kind 0 = "needs you": two rising

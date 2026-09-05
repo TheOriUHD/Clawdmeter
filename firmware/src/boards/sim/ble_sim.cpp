@@ -127,8 +127,10 @@ static void sim_apply_page(const char* p) {
     else if (strcmp(p, "settings3") == 0) ui_show_settings_page(2);
     else if (strcmp(p, "about") == 0)     ui_show_screen(SCREEN_ABOUT);
     else if (strcmp(p, "settings4") == 0) ui_show_settings_page(3);
+    else if (strcmp(p, "settings5") == 0) ui_show_settings_page(4);
     else if (strcmp(p, "working") == 0)   ui_show_level_page(0);
     else if (strcmp(p, "trend") == 0)     ui_show_level_page(2);
+    else if (strcmp(p, "corners") == 0)   ui_debug_corners(true);
     else printf("[sim] unknown page '%s'\n", p);
 }
 

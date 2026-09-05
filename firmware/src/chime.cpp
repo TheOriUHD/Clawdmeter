@@ -13,7 +13,8 @@ static I2SClass      i2s;
 static ChimeConfig   cfg;
 static bool          ready   = false;
 static volatile bool playing = false;
-static es8311_handle_t es_handle = nullptr;   // kept so per-clip volume can be set
+static es8311_handle_t es_handle = nullptr;   // kept so the volume can be set per play
+static int             vol_pct = 80;           // chime_set_volume(); applied when a clip starts
 
 static bool es8311_setup(void) {
     es8311_handle_t es = es8311_create(0, cfg.es8311_addr);   // I2C port 0 (shared Wire bus)
@@ -30,13 +31,33 @@ static bool es8311_setup(void) {
     return true;
 }
 
-static void set_volume(uint8_t vol) {
-    if (es_handle) es8311_voice_volume_set(es_handle, vol, NULL);
+// The ES8311 DAC volume register is 0.5 dB per step with 0 dB at 191; the
+// driver maps its 0..100 argument to that register as vol*256/100-1. Turn the
+// user's percentage into dB first (-30 dB … 0 dB), then into the driver scale.
+static int codec_volume_for(int pct) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    const float db = -30.0f + 0.30f * (float)pct;
+    int reg = 191 + (int)lroundf(db * 2.0f);
+    if (reg < 0) reg = 0;
+    if (reg > 255) reg = 255;
+    int vol = (int)lroundf((reg + 1) * 100.0f / 256.0f);
+    if (vol < 1) vol = 1;
+    if (vol > 100) vol = 100;
+    return vol;
+}
+
+static void apply_volume(void) {
+    if (es_handle) es8311_voice_volume_set(es_handle, codec_volume_for(vol_pct), NULL);
+}
+
+void chime_set_volume(int pct) {
+    vol_pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
 }
 
 static void chime_task(void* arg) {
     (void)arg;
-    set_volume(cfg.volume);
+    apply_volume();
     if (cfg.amp_enable) cfg.amp_enable(true);
     delay(8);                                  // let the amp settle (avoids turn-on pop)
     i2s.write((uint8_t*)bell_pcm, bell_pcm_len);
@@ -54,9 +75,10 @@ static void chime_task(void* arg) {
 // while the first still rings), which is what makes it sound like an
 // instrument rather than a beeper.
 struct AlertNote { uint16_t freq_hz; uint16_t start_ms; uint16_t len_ms; uint8_t amp_q7; };
-static const AlertNote ALERT_NEEDS_YOU[] = { { 659, 0, 620, 40 }, { 880, 190, 760, 40 } };   // E5 → A5
-static const AlertNote ALERT_DONE[]      = { { 523, 0, 720, 34 } };                          // C5
-#define ALERT_VOLUME      46      // codec volume for alerts (the reset bell plays at cfg.volume)
+// amp_q7 64 = half of full scale per note; the two notes overlap while the
+// first decays, so their sum stays below full scale and never clips.
+static const AlertNote ALERT_NEEDS_YOU[] = { { 659, 0, 620, 64 }, { 880, 190, 760, 64 } };   // E5 → A5
+static const AlertNote ALERT_DONE[]      = { { 523, 0, 720, 56 } };                          // C5
 #define ALERT_BLOCK       256     // frames per generated block (256 × 2 ch × 16 bit = 1 KB)
 #define ALERT_DECAY_MS    260     // envelope time constant
 
@@ -98,7 +120,7 @@ static void alert_task(void* arg) {
             inc[i][h] = (uint32_t)(((uint64_t)notes[i].freq_hz * (h + 1) << 32) / sr);
 
     static int16_t block[ALERT_BLOCK * 2];
-    set_volume(ALERT_VOLUME);
+    apply_volume();
     if (cfg.amp_enable) cfg.amp_enable(true);
     delay(8);
     uint32_t frame = 0;

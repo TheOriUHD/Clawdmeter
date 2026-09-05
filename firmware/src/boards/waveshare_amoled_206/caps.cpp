@@ -9,6 +9,7 @@ static const BoardCaps caps = {
     .has_rotation = false,
     .has_battery = true,
     .has_imu = true,
+    .corner_radius = 0,   // not measured yet: glow rings stay square-cornered
 };
 
 const BoardCaps& board_caps(void) { return caps; }

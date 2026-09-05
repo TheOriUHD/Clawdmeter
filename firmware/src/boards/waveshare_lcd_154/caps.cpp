@@ -11,6 +11,7 @@ static const BoardCaps caps = {
     .has_rotation = (bool)BOARD_HAS_ROTATION,
     .has_battery  = (bool)BOARD_HAS_BATTERY,
     .has_imu      = (bool)BOARD_HAS_IMU,
+    .corner_radius = 0,   // not measured yet: glow rings stay square-cornered
 };
 
 const BoardCaps& board_caps(void) { return caps; }

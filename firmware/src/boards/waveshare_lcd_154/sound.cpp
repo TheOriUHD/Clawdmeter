@@ -24,6 +24,7 @@ void sound_hal_init(void) {
 
 void sound_hal_play_reset(void) { chime_play(); }
 void sound_hal_play_alert(int kind) { chime_play_alert(kind); }
+void sound_hal_set_volume(int pct)   { chime_set_volume(pct); }
 void sound_hal_tick(void)       { chime_tick(); }
 
 #endif  // BOARD_HAS_SOUND

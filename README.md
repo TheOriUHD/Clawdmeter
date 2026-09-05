@@ -74,27 +74,31 @@ makes the device more functional while keeping its design language intact:
 - **"Needs you" alerts.** A permission prompt, a question, a plan to approve
   — or the end of a long turn — wakes the panel, slides to the Working page
   (title **Waiting** / **Done**), starts a calm orange **glow** breathing
-  around the screen edge, has Clawd **jump and wave**, and plays a **soft
-  two-note chime** through the speaker (the C6 2.16's ES8311 is now wired up;
-  upstream left it silent). One tap acknowledges. Settings → **Companion**
-  picks the chime (Off / Needs you / All), toggles Auto-switch and Glow, and
-  has a **Preview** button so you can hear and see it.
+  along the screen edge — nested rounded rings that follow the glass's real
+  corner radius (70 px on the 2.16, `BoardCaps.corner_radius`), so nothing is
+  cut off by the bezel — has Clawd **jump and wave**, and plays a **two-note
+  chime** through the speaker (the C6 2.16's ES8311 is now wired up; upstream
+  left it silent). One tap acknowledges. Settings → **Alerts** picks the chime
+  (Off / Needs you / All), has a **Preview** button and a **Volume** slider
+  (linear in dB; the codec follows your finger and auditions on release);
+  Settings → **Companion** toggles Auto-switch and Glow and sets **Back home
+  after** (15 s … 5 min, or Stay).
 - **Trend page.** Right of Usage: the last **24 hours** of the session window
   as a line, and **daily use** of the weekly quota as seven bars (today in
   accent). The daemon keeps eight days of history in
   `~/.config/claude-usage-monitor/history.json`.
-- **Serial QA hook.** `page splash|usage|working|trend|settings|settings2..4|about`,
-  `flip`, `cc <state> [label]`, `trend demo`, `alert [0|1]`, `preview`, `swipe
-  up|down` and `stats` over the USB serial console drive the screens on boards
+- **Serial QA hook.** `page splash|usage|working|trend|settings|settings2..5|about`,
+  `flip`, `cc <state> [label]`, `trend demo`, `alert [0|1]`, `preview`, `volume N`,
+  `corners on|off`, `radius N`, `swipe up|down` and `stats` over the USB serial console drive the screens on boards
   without the framebuffer screenshot (the C6 ports).
 
 |      Weekly card, Fable face      |        Working — Claude at work        |      Waiting — Claude needs you       |            Trend             |
 | :-------------------------------: | :------------------------------------: | :-----------------------------------: | :--------------------------: |
 | ![Fable](screenshots/usage_fable.png) | ![Working](screenshots/working.png) | ![Waiting](screenshots/waiting.png) | ![Trend](screenshots/trend.png) |
 
-|     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |     Settings 3 — Weekly card     |     Settings 4 — Companion     |       Settings 5 — About      |
-| :----------------------------------: | :-----------------------------------: | :------------------------------: | :----------------------------: | :---------------------------: |
-| ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![Settings 4](screenshots/settings4.png) | ![About](screenshots/about.png) |
+|     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |     Settings 3 — Weekly card     |     Settings 4 — Alerts     |     Settings 5 — Companion     |       Settings 6 — About      |
+| :----------------------------------: | :-----------------------------------: | :------------------------------: | :-------------------------: | :----------------------------: | :---------------------------: |
+| ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![Settings 4](screenshots/settings4.png) | ![Settings 5](screenshots/settings5.png) | ![About](screenshots/about.png) |
 
 Wire format additions: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
 scoped-model limit (`n` label ≤ 15 chars, `p` percent; absent key = no scoped
@@ -111,7 +115,7 @@ them.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Usage has a page on each side: swipe right for **Working** (what Claude Code is doing right now, once the companion hooks are installed) and left for **Trend** (24 hours / 7 days of history); page dots appear while you swipe. Swipe up for the five Settings pages (clock & toggles, sliders & pairing, Weekly card, Companion, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and shows the Working page; one tap acknowledges.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Usage has a page on each side: swipe right for **Working** (what Claude Code is doing right now, once the companion hooks are installed) and left for **Trend** (24 hours / 7 days of history); page dots appear while you swipe. Swipe up for the six Settings pages (clock & toggles, sliders & pairing, Weekly card, Alerts, Companion, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and shows the Working page; one tap acknowledges.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |

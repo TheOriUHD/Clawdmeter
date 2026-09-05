@@ -18,3 +18,6 @@ void sound_hal_play_reset(void);
 // (one gentle note). Non-blocking; a no-op on boards without a speaker.
 void sound_hal_play_alert(int kind);
 
+// Loudness for every clip, 0..100 (Settings → Alerts → Volume). No-op without a speaker.
+void sound_hal_set_volume(int pct);
+
