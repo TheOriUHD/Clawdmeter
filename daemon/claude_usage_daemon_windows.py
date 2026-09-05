@@ -47,6 +47,7 @@ RECONNECT_BACKOFF_CAP = 8  # D-05: fast-reconnect cap (seconds); keeps stacked r
 CONFIG_FILE = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Clawdmeter" / "config"
 
 API_URL = "https://api.anthropic.com/v1/messages"
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 API_HEADERS_TEMPLATE = {
     "anthropic-version": "2023-06-01",
     "anthropic-beta": "oauth-2025-04-20",
@@ -136,7 +137,9 @@ def read_chime_setting() -> str:
 def read_clock_setting() -> str:
     """Read the `clock` option from the config file. One of: off|auto|12|24.
 
-    Defaults to "off" so existing setups keep showing "Usage" until opted in.
+    Defaults to "auto": the daemon always ships the wall-clock time and the
+    host's hour format, and the DEVICE decides whether to show it (Settings →
+    Clock). Set `clock = off` to never send time at all.
     """
     try:
         if CONFIG_FILE.exists():
@@ -151,7 +154,7 @@ def read_clock_setting() -> str:
                         return val
     except OSError:
         pass
-    return "off"
+    return "auto"
 
 
 def add_chime_field(payload: dict) -> None:
@@ -181,6 +184,137 @@ def add_clock_fields(payload: dict) -> None:
     tf = 24 if clock == "24" else 12 if clock == "12" else detect_hour_format()
     payload["t"] = int(time.time()) + time.localtime().tm_gmtoff
     payload["tf"] = tf
+
+
+# --- Official usage endpoint (parity with the macOS daemon) ----------------------
+#
+# GET /api/oauth/usage is what Claude Code's `/usage` screen reads: the same
+# 5h/7d windows as the rate-limit headers PLUS the per-model weekly limits
+# (limits[] kind "weekly_scoped", e.g. "Fable"), at zero token cost. Fixed 60s
+# cadence, a 15-minute bench after any 429, and poll_api() as the automatic
+# fallback for every failure — including 401/403, so poll_api stays the sole
+# authority on a dead token (AuthError → the tray toast).
+USAGE_ENDPOINT_COOLDOWN_S = 900
+SCOPED_NAME_MAX = 15                    # firmware ScopedWeekly.name is char[16]
+_usage_endpoint_cooldown_until = 0.0
+_usage_source: str | None = None
+
+
+def _note_usage_source(src: str) -> None:
+    global _usage_source
+    if src != _usage_source:
+        _usage_source = src
+        log("Usage source: " + ("OAuth usage endpoint" if src == "endpoint"
+                                else "rate-limit headers (fallback)"))
+
+
+def _iso_reset_minutes(iso, now: float) -> int:
+    """Minutes from `now` until an ISO-8601 reset timestamp; 0 if past/invalid."""
+    if not isinstance(iso, str) or not iso:
+        return 0
+    try:
+        ts = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=datetime.timezone.utc)
+    try:
+        mins = (ts.timestamp() - now) / 60.0
+    except (OSError, OverflowError):
+        return 0
+    return int(round(mins)) if mins > 0 else 0
+
+
+def _clamp_pct(value) -> int | None:
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+
+def scoped_weekly_limits(limits) -> list[dict]:
+    """[{"n": <label>, "p": <0-100>}, ...] for every weekly scoped-model limit."""
+    out: list[dict] = []
+    if not isinstance(limits, list):
+        return out
+    for lim in limits:
+        if not isinstance(lim, dict) or lim.get("kind") != "weekly_scoped":
+            continue
+        scope = lim.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        if not isinstance(model, dict):
+            continue
+        name = model.get("display_name") or model.get("id")
+        pct = _clamp_pct(lim.get("percent"))
+        if not isinstance(name, str) or not name or pct is None:
+            continue
+        out.append({"n": name[:SCOPED_NAME_MAX], "p": pct})
+    return out
+
+
+def parse_usage_response(data, now: float) -> dict | None:
+    """Pro/Max device payload from the usage endpoint's JSON, or None when the
+    response lacks the 5h+7d shape (Enterprise stays on the header method)."""
+    if not isinstance(data, dict):
+        return None
+    five = data.get("five_hour")
+    seven = data.get("seven_day")
+    s = _clamp_pct(five.get("utilization")) if isinstance(five, dict) else None
+    w = _clamp_pct(seven.get("utilization")) if isinstance(seven, dict) else None
+    if s is None or w is None:
+        return None
+    payload = {
+        "s": s,
+        "sr": _iso_reset_minutes(five.get("resets_at"), now),
+        "w": w,
+        "wr": _iso_reset_minutes(seven.get("resets_at"), now),
+        "st": "allowed" if s < 100 else "rejected",
+        "acct": "pro",
+        "ok": True,
+    }
+    ws = scoped_weekly_limits(data.get("limits"))
+    if ws:
+        payload["ws"] = ws
+    return payload
+
+
+async def poll_usage_endpoint(token: str) -> dict | None:
+    """Poll the official usage endpoint; None means "use the header fallback"."""
+    global _usage_endpoint_cooldown_until
+    now = time.time()
+    if now < _usage_endpoint_cooldown_until:
+        return None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": API_HEADERS_TEMPLATE["anthropic-beta"],
+        "User-Agent": API_HEADERS_TEMPLATE["User-Agent"],
+        "Accept": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            resp = await http.get(USAGE_URL, headers=headers)
+    except httpx.HTTPError as e:
+        log(f"Usage endpoint failed: {e}")
+        return None
+    if resp.status_code == 429:
+        _usage_endpoint_cooldown_until = now + USAGE_ENDPOINT_COOLDOWN_S
+        log(f"Usage endpoint rate-limited (429) — benched for "
+            f"{USAGE_ENDPOINT_COOLDOWN_S // 60} min, using the header fallback")
+        return None
+    if resp.status_code != 200:
+        log(f"Usage endpoint HTTP {resp.status_code}: {resp.text[:200]}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        log("Usage endpoint returned non-JSON")
+        return None
+    payload = parse_usage_response(data, now)
+    if payload is None:
+        return None
+    add_chime_field(payload)
+    add_clock_fields(payload)
+    return payload
 
 
 async def poll_api(token: str) -> dict | None:
@@ -633,7 +767,15 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                     payload = None
                     expired = False
                     try:
-                        payload = await poll_api(token)
+                        # Prefer the token-free usage endpoint (carries the per-model
+                        # weekly limits); fall back to the rate-limit headers.
+                        payload = await poll_usage_endpoint(token)
+                        if payload is not None:
+                            _note_usage_source("endpoint")
+                        else:
+                            payload = await poll_api(token)
+                            if payload is not None:
+                                _note_usage_source("headers")
                     except AuthError:
                         # Pure free-ride: we never refresh. A 401/403 means Claude Code's
                         # token has expired and only Claude Code (its owner) can re-seed it.

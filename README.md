@@ -10,9 +10,48 @@ Shift+Tab over BLE HID for Claude Code's voice mode and mode-toggle shortcuts.
 
 <img width="1179" height="994" alt="Usage meter" src="https://github.com/user-attachments/assets/83e54aea-0932-428f-94aa-b3ede3a360aa" />
 
+## This fork
+
+[TheOriUHD/Clawdmeter](https://github.com/TheOriUHD/Clawdmeter) is a fork of
+[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) that
+makes the device more functional while keeping its design language intact:
+
+- **Fable limit.** Plans with a per-model weekly allowance (the "Fable" row in
+  Claude's own usage settings) get it on the Weekly card: a labelled sub-row
+  with its own bar and percentage, sharing the weekly reset. The label is the
+  API's display name, so any future scoped model rides along without a firmware
+  change. Plans without one render the classic card, pixel for pixel.
+- **On-device settings.** Swipe left on the Usage screen for a touch Settings
+  page — tap a row to cycle it, everything persists across reboots:
+  Clock (Off / Auto / 12h / 24h) · Battery icon · Mascot · Status line ·
+  Brightness · Sleep after (5 min … Never) · Pairing (two taps forget the
+  bonded host and re-advertise). Swipe left again for an About page (board,
+  firmware, Bluetooth state and address, battery, free RAM, uptime); swipe
+  right to go back. A tap still toggles the splash, as before.
+- **Token-free daemon.** The macOS and Windows daemons read the official
+  `/api/oauth/usage` endpoint — the same data `claude /usage` renders — instead
+  of spending a 1-token message per poll. A `429` benches the endpoint for 15
+  minutes and the old rate-limit-header method is the automatic fallback, so
+  behaviour can never be worse than before.
+- **Clock is a device setting.** The daemon now always sends the time
+  (`clock = auto` by default; `12`/`24` force a format, `off` never sends it),
+  and the device decides whether to show it.
+- **Serial QA hook.** `page splash|usage|settings|about` over the USB serial
+  console drives the screens on boards without the framebuffer screenshot
+  (the C6 ports).
+
+|            Usage, Fable plan             |             Settings             |            About             |
+| :--------------------------------------: | :------------------------------: | :--------------------------: |
+| ![Fable](screenshots/usage_fable.png)    | ![Settings](screenshots/settings.png) | ![About](screenshots/about.png) |
+
+Wire format addition: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
+scoped-model limit (`n` label ≤ 15 chars, `p` percent). Absent key = no scoped
+limits; `0` is a real reading. Old firmware ignores the key, old daemons simply
+never send it.
+
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe left on Usage for Settings, and again for About; swipe right to go back.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |

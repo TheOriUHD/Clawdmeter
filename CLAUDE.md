@@ -94,10 +94,12 @@ firmware/src/
     sim/                    — native desktop simulator: SDL2 + Arduino shims + scenario playback
     template/               — copy this to bootstrap a new port
   main.cpp                  — setup() + loop(): HAL calls only, zero #ifdef BOARD_*
-  ui.{h,cpp}                — 3-screen UI (splash, usage, bluetooth). compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
+  ui.{h,cpp}                — 4-screen UI: splash, usage, settings, about. Tap toggles splash ⇄ usage; horizontal swipes page usage → settings → about (gesture handler on the LVGL screen object, with a click guard because LVGL sends CLICKED after a gesture). compute_layout() picks fonts/positions from board_caps() (breakpoints: H >= 460 large, H >= 300 compact, else small). The Weekly card has a "split" variant with a scoped-model row (Fable) — see layout_usage_panels().
+  settings.{h,cpp}          — NVS-backed user prefs (clock mode, battery/mascot/status visibility, sleep timeout); pushes the sleep timeout into idle. brightness.cpp keeps its own key in the same "clawdmeter" namespace.
+  version.h                 — FW_VERSION shown on the About page
   splash.{h,cpp}            — 20×20 pixel-art engine. CELL = min(W,H)/20, centered.
   ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard
-  data.h                    — UsageData struct
+  data.h                    — UsageData struct (+ ScopedWeekly[] from the "ws" payload key)
   icons.h                   — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
   logo.h                    — 80×80 RGB565 logo
   font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/28/24/20/16/14/12, Mono 32/18)
@@ -164,7 +166,12 @@ hardware boards, not shared code).
 
 The firmware ships a `screenshot` serial command that dumps the LVGL framebuffer. `./screenshot.sh out.png [port]` captures a PNG sized to the active display (480×480 or 368×448). **Use this on every UI iteration** — Read the PNG with the Read tool, verify the change visually, iterate. Script auto-picks the macOS/Linux default port and falls back to pio's bundled Python if pyserial isn't on the system Python.
 
-The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CONTROLLER` / `SCREEN_BLUETOOTH`, do your iteration, then revert before committing.
+The boot screen is `SCREEN_SPLASH` and only advances on a tap/button, so a fresh flash will sit on the splash. Drive the screens without touching the device with the serial command **`page splash|usage|settings|about`** (works on every board, C6 included — the C6 has no framebuffer screenshot, but every parsed payload logs a `usage: s=…% w=…% scoped=…` line and the boot banner reports free heap + LVGL pool usage). In the simulator, `SIM_PAGE=settings` (env) or a `"_sim":{"page":"about"}` key on a scenario line does the same for headless captures:
+
+```bash
+SDL_VIDEODRIVER=dummy SIM_AUTOSHOT_MS=2500 SIM_PAGE=settings SIM_SCENARIO=path/to/one-state.jsonl .pio/build/sim/program
+magick sim-autoshot.bmp shot.png   # then Read the PNG
+```
 
 ## Critical gotchas
 
@@ -236,6 +243,8 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Recent session highlights
 
+- **Fork: Fable limit + on-device settings (2026-09-05, TheOriUHD).** Weekly card gains a scoped-model sub-row (mini pill + slim bar) fed by the OAuth usage endpoint's `weekly_scoped` limits; new Settings (tap-to-cycle rows, NVS) and About pages reached by swipe; clock display moved to the device. Verified on the C6 2.16 (build + flash + serial), all screens rendered in the sim. Watch-outs learned the hard way: (1) LVGL fires `LV_EVENT_GESTURE` mid-press AND `LV_EVENT_CLICKED` on release, so any swipe handler needs a click guard; gestures bubble to the *screen* object (objects created with a parent get `GESTURE_BUBBLE`, screens don't). (2) Don't put a dev clone or a launchd agent under `~/Documents` — TCC blocks launchd agents there, and a full disk (toolchains are ~5 GB) makes APFS stall on every open. (3) The C6 boot banner now prints free heap + LVGL pool %; check it after adding widgets.
+
 - **AMOLED-1.8 chime verified on hardware + EXIO2 touch-kill fix (2026-07-13).** The 1.8's `amp_enable` hook drove both GPIO 46 and XCA9554 EXIO2 ("the unused one is harmless") — but pulling EXIO2 low takes the FT3168 off the I2C bus (chip stops ACKing; IDF reports it as `ESP_ERR_INVALID_STATE`, which reads like a driver wedge and cost a long I2S red-herring chase). Amp enable is GPIO 46 only; EXIO2 must stay HIGH. Chime, touch, buttons, and BLE bond persistence all verified on a real 1.8.
 - **Device-abstraction refactor (2026-05-18).** All board-conditional code moved out of shared files into `boards/<name>/` and behind a HAL in `hal/`. ~30 `#ifdef BOARD_*` blocks went to zero. UI is responsive via `compute_layout()` driven by `board_caps()`. New ports add a folder + a PlatformIO env — no shared file edits.
 - Added second board port: Waveshare AMOLED-1.8 (368×448 portrait, SH8601, FT3168, XCA9554 IO expander).
@@ -247,6 +256,9 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 - Battery icons converted to RGB565A8 alpha so they blend cleanly over the splash animations.
 
 ## Daemon / host side
+
+**Usage source (macOS + Windows Python daemons):** the official `GET /api/oauth/usage` endpoint — the same data `claude /usage` renders, zero token cost, and the only source of the per-model weekly limits (`limits[]` entries of kind `weekly_scoped`, e.g. Fable → payload `"ws":[{"n":"Fable","p":8}]`). Fixed 60s cadence; a 429 benches it for 15 min (`USAGE_ENDPOINT_COOLDOWN_S`); any failure or non-Pro/Max shape falls back to the 1-token `/v1/messages` header method (`poll_api`), which stays the sole authority on Enterprise detection and dead tokens. The bash (Linux) daemon still uses headers only and never sends `ws`. `clock` config defaults to `auto` — the daemon always sends `t`/`tf` and the device's Clock setting decides whether to show it. Tests: `daemon/tests/test_usage_endpoint.py`.
+
 
 Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic API, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout.
 

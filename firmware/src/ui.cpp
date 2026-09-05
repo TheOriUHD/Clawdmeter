@@ -1,7 +1,13 @@
 #include "ui.h"
 #include "splash.h"
+#include "settings.h"
+#include "brightness.h"
+#include "version.h"
 #include <lvgl.h>
 #include <time.h>
+#include <stdint.h>
+#include <string.h>
+#include <esp_heap_caps.h>
 #include "logo.h"
 #include "clawd_still.h"
 #include "icons.h"
@@ -52,6 +58,34 @@ struct Layout {
     int16_t logo_y;                  // logo top edge
     int16_t batt_y;                  // battery icon top edge
     int16_t batt_w;                  // battery icon width, for position math
+
+    // Usage screen, "split" variant: the Weekly card grows a scoped-model
+    // row (e.g. Fable) under the all-models bar. The session card gives up a
+    // little height so the pair still clears the status line.
+    int16_t split_content_y;
+    int16_t split_session_h;
+    int16_t split_gap;
+    int16_t split_weekly_h;
+    int16_t split_reset_y;           // reset line y inside the split weekly card
+    int16_t scoped_row_y;            // mini pill + % row y inside the weekly card
+    int16_t scoped_pct_dy;           // vertical nudge of the % to sit on the pill's line
+    int16_t scoped_bar_y, scoped_bar_h;
+    const lv_font_t* scoped_pill_font;
+    const lv_font_t* scoped_pct_font;
+    int16_t scoped_pill_pad_x, scoped_pill_pad_y;
+
+    // Settings page (tap-to-cycle rows)
+    int16_t set_row_h, set_row_gap, set_pad_x;
+    const lv_font_t* set_label_font;
+    const lv_font_t* set_value_font;
+    int16_t set_pill_pad_x, set_pill_pad_y;
+
+    // About page (key/value rows + footer)
+    int16_t about_row_h;
+    const lv_font_t* about_key_font;
+    const lv_font_t* about_val_font;
+    const lv_font_t* about_hint_font;
+    int16_t about_hint_y;            // footer offset from bottom
 
     // Pairing hint / idle screen
     int16_t pair_y1, pair_y2, pair_y3;
@@ -110,6 +144,35 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_panel_gap = 16;
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
+        // Split weekly card: 92 + 142 + 12 + 180 = 426 → clears the status line.
+        // Inside the card: bar 56–80, mini pill 84–112, slim bar 114–124, reset
+        // text from 126 — leaving the same breathing room under the reset line
+        // that the classic card has.
+        L.split_content_y = 92;
+        L.split_session_h = 142;
+        L.split_gap = 12;
+        L.split_weekly_h = 180;
+        L.split_reset_y = 126;
+        L.scoped_row_y = 84;
+        L.scoped_pct_dy = 1;
+        L.scoped_bar_y = 114;
+        L.scoped_bar_h = 10;
+        L.scoped_pill_font = &font_styrene_20;
+        L.scoped_pct_font  = &font_styrene_24;
+        L.scoped_pill_pad_x = 12;
+        L.scoped_pill_pad_y = 2;
+        L.set_row_h = 46;
+        L.set_row_gap = 6;
+        L.set_pad_x = 16;
+        L.set_label_font = &font_styrene_24;
+        L.set_value_font = &font_styrene_20;
+        L.set_pill_pad_x = 14;
+        L.set_pill_pad_y = 4;
+        L.about_row_h = 38;
+        L.about_key_font  = &font_styrene_20;
+        L.about_val_font  = &font_styrene_20;
+        L.about_hint_font = &font_styrene_16;
+        L.about_hint_y = -22;
         L.bt_info_panel_h = 160;
         L.bt_reset_zone_h = 110;
         L.bt_title_font    = &font_tiempos_56;
@@ -124,6 +187,31 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_panel_gap = 12;
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;
+        L.split_content_y = 82;
+        L.split_session_h = 124;
+        L.split_gap = 10;
+        L.split_weekly_h = 162;
+        L.split_reset_y = 116;
+        L.scoped_row_y = 74;
+        L.scoped_pct_dy = 1;
+        L.scoped_bar_y = 102;
+        L.scoped_bar_h = 10;
+        L.scoped_pill_font = &font_styrene_16;
+        L.scoped_pct_font  = &font_styrene_20;
+        L.scoped_pill_pad_x = 10;
+        L.scoped_pill_pad_y = 2;
+        L.set_row_h = 40;
+        L.set_row_gap = 5;
+        L.set_pad_x = 14;
+        L.set_label_font = &font_styrene_20;
+        L.set_value_font = &font_styrene_16;
+        L.set_pill_pad_x = 12;
+        L.set_pill_pad_y = 3;
+        L.about_row_h = 32;
+        L.about_key_font  = &font_styrene_16;
+        L.about_val_font  = &font_styrene_16;
+        L.about_hint_font = &font_styrene_14;
+        L.about_hint_y = -18;
         L.bt_info_panel_h = 140;
         L.bt_reset_zone_h = 90;
         L.bt_title_font    = &font_tiempos_34;
@@ -162,6 +250,31 @@ static void compute_layout(const BoardCaps& c) {
         L.logo_y = 2;
         L.batt_y = 10;
         L.batt_w = ICON_BATTERY_SMALL_W;
+        L.split_content_y = 42;
+        L.split_session_h = 70;
+        L.split_gap = 4;
+        L.split_weekly_h = 88;
+        L.split_reset_y = 64;
+        L.scoped_row_y = 42;
+        L.scoped_pct_dy = 0;
+        L.scoped_bar_y = 58;
+        L.scoped_bar_h = 6;
+        L.scoped_pill_font = &font_styrene_12;
+        L.scoped_pct_font  = &font_styrene_14;
+        L.scoped_pill_pad_x = 6;
+        L.scoped_pill_pad_y = 1;
+        L.set_row_h = 24;
+        L.set_row_gap = 3;
+        L.set_pad_x = 8;
+        L.set_label_font = &font_styrene_14;
+        L.set_value_font = &font_styrene_12;
+        L.set_pill_pad_x = 6;
+        L.set_pill_pad_y = 1;
+        L.about_row_h = 20;
+        L.about_key_font  = &font_styrene_12;
+        L.about_val_font  = &font_styrene_12;
+        L.about_hint_font = &font_styrene_12;
+        L.about_hint_y = -6;
         L.pair_y1 = 12;
         L.pair_y2 = 56;
         L.pair_y3 = 80;
@@ -190,15 +303,17 @@ static void compute_layout(const BoardCaps& c) {
 #define COL_RED       THEME_RED
 #define COL_BAR_BG    THEME_BAR_BG
 
-// ---- Usage screen widgets (single non-splash view) ----
+// ---- Usage screen widgets ----
 static lv_obj_t* usage_container;
 static lv_obj_t* lbl_title;
 // Clock fed by the daemon: base epoch (local wall-clock seconds) + the lv_tick at
 // which it landed, so the title ticks forward locally between 60s payloads.
+// Whether it is SHOWN is the device's own Clock setting (settings.h).
 static long     clock_base_epoch = 0;
 static uint32_t clock_base_ms = 0;
-static int      clock_fmt = 24;   // 12 or 24, set from the daemon payload
+static int      clock_fmt = 24;   // 12 or 24, the host's format from the daemon payload
 static int      clock_last_min = -1;   // last rendered minute; avoids redrawing the title every tick
+static bool     title_is_clock = false;
 static lv_obj_t* usage_group;   // the two usage panels — shown when connected
 static lv_obj_t* pair_group;    // pairing hint — shown when disconnected
 static lv_obj_t* bar_session;
@@ -216,6 +331,57 @@ static lv_obj_t* lbl_session_pct_sym = nullptr;  // "%" in smaller font
 static lv_obj_t* lbl_spending_desc = nullptr;     // "of your monthly budget"
 static lv_obj_t* lbl_spending_status = nullptr;   // "Under pace" / "On pace" / "Over pace"
 static lv_obj_t* lbl_anim;      // status line: connection state + whimsical idle
+
+// ---- Weekly card split: scoped-model row (e.g. Fable) ----
+// Some plans meter one model separately inside the weekly window. The Weekly
+// card then grows a second row — mini pill (the model's own label from the
+// API) + its percent + a slim bar — under the all-models bar. Both share the
+// weekly reset line, because the API resets them at the same instant. Plans
+// without a scoped limit render the classic single-bar card unchanged.
+static lv_obj_t* pill_scoped = nullptr;
+static lv_obj_t* lbl_scoped_pct = nullptr;
+static lv_obj_t* bar_scoped = nullptr;
+static bool      usage_split = false;
+static bool      usage_laid_out = false;
+static ScopedWeekly cached_scoped[MAX_SCOPED_WEEKLY];
+static int       cached_scoped_count = 0;
+static int       scoped_face = 0;        // which scoped limit the row shows (rotates if >1)
+
+// ---- Settings page ----
+static lv_obj_t* settings_container = nullptr;
+enum SettingRow {
+    ROW_CLOCK, ROW_BATTERY, ROW_MASCOT, ROW_STATUS, ROW_BRIGHTNESS, ROW_SLEEP, ROW_PAIRING,
+    ROW_COUNT,
+};
+static const char* const ROW_LABELS[ROW_COUNT] = {
+    "Clock", "Battery icon", "Mascot", "Status line", "Brightness", "Sleep after", "Pairing",
+};
+static lv_obj_t* row_value[ROW_COUNT];
+static uint32_t  pairing_confirm_ms = 0;   // >0 while "Tap to confirm" is armed
+static uint32_t  pairing_cleared_ms = 0;   // >0 while "Cleared" is shown
+#define PAIRING_CONFIRM_MS 4000
+#define PAIRING_CLEARED_MS 3000
+
+// ---- About page ----
+static lv_obj_t* about_container = nullptr;
+enum AboutRow {
+    ABOUT_BOARD, ABOUT_FW, ABOUT_BLE, ABOUT_ADDR, ABOUT_BATTERY, ABOUT_RAM, ABOUT_UPTIME,
+    ABOUT_COUNT,
+};
+static const char* const ABOUT_KEYS[ABOUT_COUNT] = {
+    "Board", "Firmware", "Bluetooth", "Address", "Battery", "Free RAM", "Uptime",
+};
+static lv_obj_t* about_value[ABOUT_COUNT];
+static uint32_t  about_last_refresh_ms = 0;
+static int       batt_pct_cached = -1;
+static bool      batt_charging_cached = false;
+
+// ---- Gestures ----
+// Swipe left/right pages Usage → Settings → About and back; a tap still
+// toggles the splash. LVGL reports the gesture mid-press and then ALSO sends
+// CLICKED on release, so clicks are ignored for a moment after any gesture.
+static uint32_t  last_gesture_ms = 0;
+#define GESTURE_CLICK_GUARD_MS 600
 
 // ---- Battery indicator (shared, on top) ----
 static lv_obj_t* battery_img;
@@ -313,6 +479,15 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 
 // Forward decls — callbacks defined near ui_show_screen below
 static void global_click_cb(lv_event_t* e);
+static void gesture_cb(lv_event_t* e);
+static void settings_row_cb(lv_event_t* e);
+static void refresh_settings_rows(void);
+static void refresh_about(void);
+static void apply_header_visibility(void);
+
+static bool click_guarded(void) {
+    return (lv_tick_get() - last_gesture_ms) < GESTURE_CLICK_GUARD_MS;
+}
 
 static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* panel = lv_obj_create(parent);
@@ -355,19 +530,46 @@ static void init_icon_dsc_rgb565a8(lv_image_dsc_t* dsc, int w, int h, const uint
     dsc->data_size = w * h * 3;
 }
 
-static lv_obj_t* make_pill(lv_obj_t* parent, const char* text) {
+// A label drawn as a rounded pill — the UI's labelling device (card names,
+// settings values, the scoped-model tag).
+static lv_obj_t* make_pill_styled(lv_obj_t* parent, const char* text, const lv_font_t* font,
+                                  int pad_x, int pad_y) {
     lv_obj_t* lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, L.pill_font, 0);
+    lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
     lv_obj_set_style_bg_color(lbl, COL_BAR_BG, 0);
     lv_obj_set_style_bg_opa(lbl, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(lbl, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_left(lbl, L.pill_pad_x, 0);
-    lv_obj_set_style_pad_right(lbl, L.pill_pad_x, 0);
-    lv_obj_set_style_pad_top(lbl, L.pill_pad_y, 0);
-    lv_obj_set_style_pad_bottom(lbl, L.pill_pad_y, 0);
+    lv_obj_set_style_pad_left(lbl, pad_x, 0);
+    lv_obj_set_style_pad_right(lbl, pad_x, 0);
+    lv_obj_set_style_pad_top(lbl, pad_y, 0);
+    lv_obj_set_style_pad_bottom(lbl, pad_y, 0);
     return lbl;
+}
+
+static lv_obj_t* make_pill(lv_obj_t* parent, const char* text) {
+    return make_pill_styled(parent, text, L.pill_font, L.pill_pad_x, L.pill_pad_y);
+}
+
+// Full-screen transparent page root with the shared header title. Pages other
+// than Usage get their own so the header stays identical across pages while
+// the corner mascot + battery glyph (screen-level objects) persist.
+static lv_obj_t* make_page(lv_obj_t* scr, const char* title) {
+    lv_obj_t* page = lv_obj_create(scr);
+    lv_obj_set_size(page, L.scr_w, L.scr_h);
+    lv_obj_set_pos(page, 0, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(page, 0, 0);
+    lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* t = lv_label_create(page);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, L.title_font, 0);
+    lv_obj_set_style_text_color(t, COL_TEXT, 0);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, L.title_nudge, L.title_y);
+    return page;
 }
 
 static void init_battery_icons(void) {
@@ -412,6 +614,46 @@ static lv_obj_t* make_usage_panel(lv_obj_t* parent, int y, const char* pill_text
     lv_obj_set_pos(*out_reset, 0, L.usage_reset_y);
 
     return panel;
+}
+
+// Position the two usage cards for the classic (single weekly bar) or split
+// (weekly + scoped-model row) variant. Only touches geometry when the mode
+// actually changes, so a steady stream of payloads never re-lays-out.
+static void layout_usage_panels(bool split) {
+    if (usage_laid_out && split == usage_split) return;
+    usage_laid_out = true;
+    usage_split = split;
+    const int cy  = split ? L.split_content_y : L.content_y;
+    const int sh  = split ? L.split_session_h : L.usage_panel_h;
+    const int gap = split ? L.split_gap       : L.usage_panel_gap;
+    const int wh  = split ? L.split_weekly_h  : L.usage_panel_h;
+    lv_obj_set_pos(panel_session, L.margin, cy);
+    lv_obj_set_height(panel_session, sh);
+    lv_obj_set_pos(panel_weekly, L.margin, cy + sh + gap);
+    lv_obj_set_height(panel_weekly, wh);
+    lv_obj_set_y(lbl_weekly_reset, split ? L.split_reset_y : L.usage_reset_y);
+    if (split) {
+        lv_obj_clear_flag(pill_scoped,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_scoped_pct, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(bar_scoped,     LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(pill_scoped,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_scoped_pct, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(bar_scoped,     LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// Draw the scoped-model row from the cached payload. With more than one scoped
+// limit the row rotates through them in step with the status ticker.
+static void render_scoped_row(bool animate) {
+    if (cached_scoped_count <= 0) return;
+    if (scoped_face >= cached_scoped_count) scoped_face = 0;
+    const ScopedWeekly& s = cached_scoped[scoped_face];
+    const int p = (int)(s.pct + 0.5f);
+    lv_label_set_text(pill_scoped, s.name);
+    lv_label_set_text_fmt(lbl_scoped_pct, "%d%%", p);
+    lv_bar_set_value(bar_scoped, p, animate ? LV_ANIM_ON : LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar_scoped, pct_color(s.pct), LV_PART_INDICATOR);
 }
 
 // Pairing hint — shown when disconnected so the screen isn't empty and the
@@ -529,6 +771,23 @@ static void init_usage_screen(lv_obj_t* scr) {
     // Recolor enabled so enterprise period box can color pace and reset separately
     lv_label_set_recolor(lbl_weekly_reset, true);
 
+    // Scoped-model row inside the weekly card (hidden until a payload carries
+    // one). Mini pill left, percent right, slim bar underneath — the card's
+    // own grammar in miniature.
+    pill_scoped = make_pill_styled(panel_weekly, "Fable", L.scoped_pill_font,
+                                   L.scoped_pill_pad_x, L.scoped_pill_pad_y);
+    lv_obj_set_pos(pill_scoped, 0, L.scoped_row_y);
+    lbl_scoped_pct = lv_label_create(panel_weekly);
+    lv_label_set_text(lbl_scoped_pct, "---%");
+    lv_obj_set_style_text_font(lbl_scoped_pct, L.scoped_pct_font, 0);
+    lv_obj_set_style_text_color(lbl_scoped_pct, COL_TEXT, 0);
+    lv_obj_align(lbl_scoped_pct, LV_ALIGN_TOP_RIGHT, 0, L.scoped_row_y + L.scoped_pct_dy);
+    bar_scoped = make_bar(panel_weekly, 0, L.scoped_bar_y,
+                          L.content_w - 2 * L.panel_pad_x, L.scoped_bar_h);
+    lv_obj_set_style_radius(bar_scoped, L.scoped_bar_h / 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar_scoped, L.scoped_bar_h / 2, LV_PART_INDICATOR);
+    layout_usage_panels(false);
+
     build_pair_group(usage_container);
     build_idle_group(usage_container);
 
@@ -540,6 +799,167 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, L.anim_y);
 }
 
+// ======== Settings Screen ========
+//
+// One card per setting: label left, current value as a pill right. Tapping a
+// row cycles its value and persists it (settings.cpp / brightness.cpp), then
+// the change is applied live. The Pairing row is a two-tap action.
+
+static void build_settings_screen(lv_obj_t* scr) {
+    settings_container = make_page(scr, "Settings");
+    int y = L.content_y;
+    for (int i = 0; i < ROW_COUNT; i++) {
+        lv_obj_t* row = lv_obj_create(settings_container);
+        lv_obj_set_pos(row, L.margin, y);
+        lv_obj_set_size(row, L.content_w, L.set_row_h);
+        lv_obj_set_style_bg_color(row, COL_PANEL, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(row, 8, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_left(row, L.set_pad_x, 0);
+        lv_obj_set_style_pad_right(row, L.set_pad_x, 0);
+        lv_obj_set_style_pad_top(row, 0, 0);
+        lv_obj_set_style_pad_bottom(row, 0, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(row, settings_row_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+
+        lv_obj_t* lbl = lv_label_create(row);
+        lv_label_set_text(lbl, ROW_LABELS[i]);
+        lv_obj_set_style_text_font(lbl, L.set_label_font, 0);
+        lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
+        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+
+        row_value[i] = make_pill_styled(row, "", L.set_value_font,
+                                        L.set_pill_pad_x, L.set_pill_pad_y);
+        lv_obj_align(row_value[i], LV_ALIGN_RIGHT_MID, 0, 0);
+
+        y += L.set_row_h + L.set_row_gap;
+    }
+    refresh_settings_rows();
+    lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void refresh_settings_rows(void) {
+    if (!settings_container) return;
+    const Settings& s = settings_get();
+    lv_label_set_text(row_value[ROW_CLOCK], settings_clock_label(s.clock));
+    lv_label_set_text(row_value[ROW_BATTERY],
+        !board_caps().has_battery ? "No battery" : s.show_battery ? "Shown" : "Hidden");
+    lv_label_set_text(row_value[ROW_MASCOT], s.show_mascot ? "Shown" : "Hidden");
+    lv_label_set_text(row_value[ROW_STATUS], s.show_status ? "Shown" : "Hidden");
+    lv_label_set_text(row_value[ROW_BRIGHTNESS], brightness_label(brightness_get_index()));
+    lv_label_set_text(row_value[ROW_SLEEP], settings_sleep_label(s.sleep));
+
+    const char* pair_text = pairing_cleared_ms ? "Cleared"
+                          : pairing_confirm_ms ? "Tap to confirm"
+                          : "Forget host";
+    lv_label_set_text(row_value[ROW_PAIRING], pair_text);
+    lv_obj_set_style_text_color(row_value[ROW_PAIRING],
+                                pairing_confirm_ms ? COL_ACCENT : COL_TEXT, 0);
+}
+
+static void settings_row_cb(lv_event_t* e) {
+    if (click_guarded()) return;
+    const int row = (int)(intptr_t)lv_event_get_user_data(e);
+    const Settings& s = settings_get();
+    switch (row) {
+    case ROW_CLOCK:
+        settings_set_clock((uint8_t)((s.clock + 1) % CLOCK_MODE_COUNT));
+        clock_last_min = -1;   // re-render the title on the next usage tick
+        break;
+    case ROW_BATTERY:
+        if (board_caps().has_battery) settings_set_show_battery(!s.show_battery);
+        break;
+    case ROW_MASCOT:     settings_set_show_mascot(!s.show_mascot); break;
+    case ROW_STATUS:     settings_set_show_status(!s.show_status); break;
+    case ROW_BRIGHTNESS: brightness_cycle(); break;
+    case ROW_SLEEP:
+        settings_set_sleep((uint8_t)((s.sleep + 1) % SLEEP_MODE_COUNT));
+        break;
+    case ROW_PAIRING:
+        // Two taps within PAIRING_CONFIRM_MS: forget the bonded host and
+        // re-advertise (same effect as the hold-power gesture).
+        if (pairing_cleared_ms) break;
+        if (pairing_confirm_ms) {
+            ble_clear_bonds();
+            pairing_confirm_ms = 0;
+            pairing_cleared_ms = lv_tick_get();
+        } else {
+            pairing_confirm_ms = lv_tick_get();
+        }
+        break;
+    default: break;
+    }
+    ui_refresh_settings();
+}
+
+// ======== About Screen ========
+
+static void build_about_screen(lv_obj_t* scr) {
+    about_container = make_page(scr, "About");
+
+    const int rows_h = ABOUT_COUNT * L.about_row_h;
+    lv_obj_t* panel = make_panel(about_container, L.margin, L.content_y, L.content_w,
+                                 rows_h + 2 * L.panel_pad_y);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_EVENT_BUBBLE);
+    for (int i = 0; i < ABOUT_COUNT; i++) {
+        const int y = i * L.about_row_h;
+        lv_obj_t* key = lv_label_create(panel);
+        lv_label_set_text(key, ABOUT_KEYS[i]);
+        lv_obj_set_style_text_font(key, L.about_key_font, 0);
+        lv_obj_set_style_text_color(key, COL_DIM, 0);
+        lv_obj_set_pos(key, 0, y);
+
+        about_value[i] = lv_label_create(panel);
+        lv_label_set_text(about_value[i], "");
+        lv_obj_set_style_text_font(about_value[i], L.about_val_font, 0);
+        lv_obj_set_style_text_color(about_value[i], COL_TEXT, 0);
+        lv_obj_align(about_value[i], LV_ALIGN_TOP_RIGHT, 0, y);
+    }
+
+    lv_obj_t* hint = lv_label_create(about_container);
+    lv_label_set_text(hint, "Swipe right to go back");
+    lv_obj_set_style_text_font(hint, L.about_hint_font, 0);
+    lv_obj_set_style_text_color(hint, COL_DIM, 0);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, L.about_hint_y - L.about_row_h);
+
+    lv_obj_t* credit = lv_label_create(about_container);
+    lv_label_set_text(credit, "github.com/TheOriUHD/Clawdmeter");
+    lv_obj_set_style_text_font(credit, L.about_hint_font, 0);
+    lv_obj_set_style_text_color(credit, COL_DIM, 0);
+    lv_obj_align(credit, LV_ALIGN_BOTTOM_MID, 0, L.about_hint_y);
+
+    refresh_about();
+    lv_obj_add_flag(about_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void refresh_about(void) {
+    if (!about_container) return;
+    char buf[48];
+    lv_label_set_text(about_value[ABOUT_BOARD], board_caps().name);
+    lv_label_set_text(about_value[ABOUT_FW], FW_VERSION);
+    lv_label_set_text(about_value[ABOUT_BLE], s_ble_connected ? "Connected" : "Advertising");
+    lv_label_set_text(about_value[ABOUT_ADDR], ble_get_mac_address());
+
+    if (!board_caps().has_battery)   snprintf(buf, sizeof(buf), "None");
+    else if (batt_pct_cached < 0)    snprintf(buf, sizeof(buf), "n/a");
+    else snprintf(buf, sizeof(buf), "%d%%%s", batt_pct_cached,
+                  batt_charging_cached ? " \xE2\x80\xA2 charging" : "");
+    lv_label_set_text(about_value[ABOUT_BATTERY], buf);
+
+    const size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (free_b) snprintf(buf, sizeof(buf), "%u KB", (unsigned)(free_b / 1024));
+    else        snprintf(buf, sizeof(buf), "n/a");
+    lv_label_set_text(about_value[ABOUT_RAM], buf);
+
+    const uint32_t up_s = lv_tick_get() / 1000;
+    if (up_s >= 3600) snprintf(buf, sizeof(buf), "%luh %02lum",
+                               (unsigned long)(up_s / 3600), (unsigned long)((up_s % 3600) / 60));
+    else              snprintf(buf, sizeof(buf), "%lum %02lus",
+                               (unsigned long)(up_s / 60), (unsigned long)(up_s % 60));
+    lv_label_set_text(about_value[ABOUT_UPTIME], buf);
+}
+
 // ======== Public API ========
 
 void ui_init(void) {
@@ -548,6 +968,11 @@ void ui_init(void) {
     lv_obj_t* scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    // A screen that can scroll swallows horizontal drags as scroll attempts
+    // (the walking mascot briefly pokes past the edge on PSRAM boards). Pages
+    // never overflow, so disable it and let swipes reach the gesture handler.
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(scr, gesture_cb, LV_EVENT_GESTURE, NULL);
 
 #ifndef BOARD_HAS_PSRAM
     // Static corner mascot (see clawd_still.h) — the animated one needs PSRAM.
@@ -557,6 +982,8 @@ void ui_init(void) {
     init_battery_icons();
 
     init_usage_screen(scr);
+    build_settings_screen(scr);
+    build_about_screen(scr);
     splash_init(scr);
 
     if (splash_get_root()) {
@@ -597,14 +1024,12 @@ void ui_update(const UsageData* data) {
     last_data_ms = lv_tick_get();   // a real usage update just landed
     data_received = true;
 
-    if (data->clock_epoch > 0) {    // daemon supplied wall-clock time → drive the title clock
+    if (data->clock_epoch > 0) {    // daemon supplied wall-clock time → the title clock may run
         clock_base_epoch = data->clock_epoch;
         clock_base_ms = last_data_ms;
         clock_fmt = data->clock_fmt;
-    } else if (clock_base_epoch != 0) {   // clock turned off daemon-side → revert title to "Usage"
+    } else {                        // no time from the daemon → the title reverts to "Usage"
         clock_base_epoch = 0;
-        clock_last_min = -1;
-        lv_label_set_text(lbl_title, "Usage");
     }
 
     int s_pct = (int)(data->session_pct + 0.5f);
@@ -627,6 +1052,13 @@ void ui_update(const UsageData* data) {
         lv_obj_add_flag(lbl_spending_status, LV_OBJ_FLAG_HIDDEN);
         if (panel_weekly) lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
     }
+
+    // Scoped weekly limits (e.g. Fable). Key absence → count 0 → classic card;
+    // 0% is a real reading. Enterprise has no weekly window at all.
+    cached_scoped_count = data->enterprise ? 0 : data->scoped_weekly_count;
+    for (int i = 0; i < cached_scoped_count; i++) cached_scoped[i] = data->scoped_weekly[i];
+    if (scoped_face >= cached_scoped_count) scoped_face = 0;
+    layout_usage_panels(cached_scoped_count > 0);
 
     char buf[48];
 
@@ -666,12 +1098,14 @@ void ui_update(const UsageData* data) {
                  pace_hex, pace_text, data->reset_date);
         lv_label_set_text(lbl_weekly_reset, buf);
     } else {
+        lv_label_set_text(lbl_weekly_label, "Weekly");
         int w_pct = (int)(data->weekly_pct + 0.5f);
         lv_label_set_text_fmt(lbl_weekly_pct, "%d%%", w_pct);
         lv_bar_set_value(bar_weekly, w_pct, LV_ANIM_ON);
         lv_obj_set_style_bg_color(bar_weekly, pct_color(data->weekly_pct), LV_PART_INDICATOR);
         format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
+        if (cached_scoped_count > 0) render_scoped_row(true);
     }
 }
 
@@ -698,37 +1132,76 @@ static void update_view_state(void) {
                       LV_OBJ_FLAG_HIDDEN);
 }
 
+// The title shows the time only when the daemon supplied it AND the device's
+// Clock setting is on; the format is the device's choice, or the host's when
+// set to Auto.
+static void tick_title_clock(uint32_t now) {
+    const uint8_t mode = settings_get().clock;
+    const bool wanted = (mode != CLOCK_OFF) && clock_base_epoch > 0;
+    if (!wanted) {
+        if (title_is_clock) {
+            lv_label_set_text(lbl_title, "Usage");
+            title_is_clock = false;
+            clock_last_min = -1;
+        }
+        return;
+    }
+    const int fmt = (mode == CLOCK_12H) ? 12 : (mode == CLOCK_24H) ? 24 : clock_fmt;
+    time_t cur = (time_t)(clock_base_epoch + (now - clock_base_ms) / 1000);
+    struct tm tmv;
+    gmtime_r(&cur, &tmv);   // epoch is already local wall-clock → gmtime keeps it as-is
+    if (tmv.tm_min == clock_last_min && title_is_clock) return;   // only rewrite when the minute changes
+    clock_last_min = tmv.tm_min;
+    title_is_clock = true;
+    char tbuf[12];
+    if (fmt == 12) {
+        int h12 = tmv.tm_hour % 12;
+        if (h12 == 0) h12 = 12;
+        snprintf(tbuf, sizeof(tbuf), "%d:%02d %s", h12, tmv.tm_min,
+                 tmv.tm_hour < 12 ? "AM" : "PM");
+    } else {
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+    }
+    lv_label_set_text(lbl_title, tbuf);
+}
+
 void ui_tick_anim(void) {
+    const uint32_t now = lv_tick_get();
+
+    if (current_screen == SCREEN_ABOUT) {
+        if (now - about_last_refresh_ms >= 1000) {
+            about_last_refresh_ms = now;
+            refresh_about();
+        }
+        return;
+    }
+    if (current_screen == SCREEN_SETTINGS) {
+        // Expire the two-tap pairing confirmation / the "Cleared" notice.
+        if (pairing_confirm_ms && now - pairing_confirm_ms >= PAIRING_CONFIRM_MS) {
+            pairing_confirm_ms = 0;
+            refresh_settings_rows();
+        }
+        if (pairing_cleared_ms && now - pairing_cleared_ms >= PAIRING_CLEARED_MS) {
+            pairing_cleared_ms = 0;
+            refresh_settings_rows();
+        }
+        return;
+    }
     if (current_screen != SCREEN_USAGE) return;
+
     update_view_state();
     if (view_state == 1) splash_mini_tick();   // animate the sleeping creature on the idle screen
 
-    uint32_t now = lv_tick_get();
-
-    // Title clock: once the daemon has sent wall-clock time, replace "Usage" with
-    // the live time, advanced locally so it ticks every minute between payloads.
-    if (clock_base_epoch > 0) {
-        time_t cur = (time_t)(clock_base_epoch + (now - clock_base_ms) / 1000);
-        struct tm tmv;
-        gmtime_r(&cur, &tmv);   // epoch is already local wall-clock → gmtime keeps it as-is
-        if (tmv.tm_min != clock_last_min) {   // only rewrite the title when the minute changes
-            clock_last_min = tmv.tm_min;
-            char tbuf[12];
-            if (clock_fmt == 12) {
-                int h12 = tmv.tm_hour % 12;
-                if (h12 == 0) h12 = 12;
-                snprintf(tbuf, sizeof(tbuf), "%d:%02d %s", h12, tmv.tm_min,
-                         tmv.tm_hour < 12 ? "AM" : "PM");
-            } else {
-                snprintf(tbuf, sizeof(tbuf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
-            }
-            lv_label_set_text(lbl_title, tbuf);
-        }
-    }
+    tick_title_clock(now);
 
     if (now - anim_msg_start >= ANIM_MSG_MS) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
         anim_msg_start = now;
+        // Several scoped limits share one row: rotate it with the ticker word.
+        if (cached_scoped_count > 1 && view_state == 2 && usage_split) {
+            scoped_face = (scoped_face + 1) % cached_scoped_count;
+            render_scoped_row(false);
+        }
     }
 
     if (now - anim_last_ms < spinner_ms[anim_spinner_idx]) return;
@@ -757,37 +1230,79 @@ void ui_tick_anim(void) {
 }
 
 static screen_t prev_non_splash_screen = SCREEN_USAGE;
-static void apply_battery_visibility(void) {
-    if (!battery_img) return;
-    if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-    else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+
+// Header chrome (battery glyph, corner mascot) and the status ticker follow the
+// user's settings on every non-splash page; the splash hides all of them.
+static void apply_header_visibility(void) {
+    const Settings& s = settings_get();
+    const bool on_splash = (current_screen == SCREEN_SPLASH);
+    if (battery_img) {
+        if (on_splash || !s.show_battery) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+        else                              lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    }
+    const bool mascot = !on_splash && s.show_mascot;
+    splash_mascot_set_visible(mascot);
+    if (logo_img) {
+        if (mascot) lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (lbl_anim) {
+        if (s.show_status) lv_obj_clear_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
+        else               lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void global_click_cb(lv_event_t* e) {
     (void)e;
+    if (click_guarded()) return;
     if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
     else                                  ui_show_screen(SCREEN_SPLASH);
 }
 
+// Horizontal swipes page between Usage → Settings → About (left) and back
+// (right); on the splash any swipe returns to the last page.
+static void gesture_cb(lv_event_t* e) {
+    (void)e;
+    lv_indev_t* indev = lv_indev_active();
+    if (!indev) return;
+    const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    if (dir != LV_DIR_LEFT && dir != LV_DIR_RIGHT) return;
+    last_gesture_ms = lv_tick_get();
+    switch (current_screen) {
+    case SCREEN_SPLASH:   ui_show_screen(prev_non_splash_screen); break;
+    case SCREEN_USAGE:    if (dir == LV_DIR_LEFT) ui_show_screen(SCREEN_SETTINGS); break;
+    case SCREEN_SETTINGS: ui_show_screen(dir == LV_DIR_LEFT ? SCREEN_ABOUT : SCREEN_USAGE); break;
+    case SCREEN_ABOUT:    if (dir == LV_DIR_RIGHT) ui_show_screen(SCREEN_SETTINGS); break;
+    default: break;
+    }
+}
+
 void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+    if (settings_container) lv_obj_add_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+    if (about_container)    lv_obj_add_flag(about_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
-    case SCREEN_SPLASH:  splash_show(); break;
-    case SCREEN_USAGE:   lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_SPLASH:   splash_show(); break;
+    case SCREEN_USAGE:    lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_SETTINGS:
+        pairing_confirm_ms = 0;
+        pairing_cleared_ms = 0;
+        refresh_settings_rows();
+        lv_obj_clear_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
+        break;
+    case SCREEN_ABOUT:
+        refresh_about();
+        about_last_refresh_ms = lv_tick_get();
+        lv_obj_clear_flag(about_container, LV_OBJ_FLAG_HIDDEN);
+        break;
     default: break;
-    }
-
-    splash_mascot_set_visible(screen != SCREEN_SPLASH);
-    if (logo_img) {
-        if (screen == SCREEN_SPLASH) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-        else                          lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
     current_screen = screen;
-    apply_battery_visibility();
+    apply_header_visibility();
 }
 
 void ui_toggle_splash(void) {
@@ -797,6 +1312,12 @@ void ui_toggle_splash(void) {
 
 screen_t ui_get_current_screen(void) {
     return current_screen;
+}
+
+void ui_refresh_settings(void) {
+    refresh_settings_rows();
+    apply_header_visibility();
+    clock_last_min = -1;   // title clock re-evaluates its mode on the next tick
 }
 
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
@@ -810,6 +1331,8 @@ void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) 
 }
 
 void ui_update_battery(int percent, bool charging) {
+    batt_pct_cached = percent;
+    batt_charging_cached = charging;
     if (!battery_img) return;
     int idx;
     if (charging) {
@@ -826,5 +1349,5 @@ void ui_update_battery(int percent, bool charging) {
         idx = 3;
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
-    apply_battery_visibility();
+    apply_header_visibility();
 }

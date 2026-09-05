@@ -22,11 +22,13 @@
 #   off = silent (default)
 #   on  = chime through the board speaker (boards with audio: AMOLED-2.16 / 1.8)
 chime = off
-# Show a clock on the Usage screen, in place of the "Usage" title.
-#   off  = no clock; the screen keeps showing "Usage" (default)
-#   auto = show the clock, auto-detecting 12h/24h from this machine's settings
+# Wall-clock time for the device. The daemon sends the current time with every
+# payload; whether the Usage screen shows it (in place of the "Usage" title) is
+# decided ON THE DEVICE — swipe left to Settings → Clock (Off / Auto / 12h / 24h).
+#   auto = send the time with this machine's 12h/24h preference (default)
 #          (detection can default to 24h when the daemon runs under launchd/systemd
-#           with no locale — set 12 or 24 explicitly below if auto guesses wrong)
-#   12   = show the clock, forced 12-hour  (e.g. 6:28 PM)
-#   24   = show the clock, forced 24-hour  (e.g. 18:28)
-clock = off
+#           with no locale — the device's Clock setting can force 12h or 24h)
+#   12   = send the time flagged 12-hour  (e.g. 6:28 PM)
+#   24   = send the time flagged 24-hour  (e.g. 18:28)
+#   off  = never send the time; the device cannot show a clock at all
+clock = auto

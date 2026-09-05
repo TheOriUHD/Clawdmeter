@@ -94,21 +94,24 @@ configure_config_dirs() {
     echo "  -> $CONFIG_FILE"
 }
 
-# Offer the optional clock display (shown in place of the "Usage" title). Only
-# writes the key when it actually changes the current/default value.
+# Offer the clock format the daemon sends (the device's Settings page decides
+# whether the time is shown in place of the "Usage" title). Only writes the key
+# when it actually changes the current/default value.
 configure_clock() {
     [ -t 0 ] || return 0
     local ans cur
     cur=$(current_config_value clock)
-    read -r -p "  Show a clock instead of the \"Usage\" title? [off/auto/12/24] (default off) " ans || ans=""
+    echo "  The daemon sends the time; the device's own Settings page decides whether"
+    echo "  to show a clock. 'off' stops sending time entirely."
+    read -r -p "  Time format to send? [auto/12/24/off] (default auto) " ans || ans=""
     ans=$(echo "$ans" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-    [ -z "$ans" ] && ans="off"
+    [ -z "$ans" ] && ans="auto"
     case "$ans" in
         off|auto|12|24) ;;
         *) echo "  Unrecognized '$ans' — leaving clock unchanged."; return 0 ;;
     esac
-    if [ "$ans" = "off" ] && { [ -z "$cur" ] || [ "$cur" = "off" ]; }; then
-        echo "  Clock off (default)."
+    if [ "$ans" = "auto" ] && { [ -z "$cur" ] || [ "$cur" = "auto" ]; }; then
+        echo "  Clock: auto (default)."
         return 0
     fi
     upsert_config_key clock "$ans"

@@ -12,6 +12,7 @@
 #include "idle.h"
 #include "idle_cfg.h"
 #include "brightness.h"
+#include "settings.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -110,6 +111,18 @@ static bool parse_json(const char* json, UsageData* out) {
     out->session_reset_mins = doc["sr"] | -1;
     out->weekly_pct = doc["w"] | 0.0f;
     out->weekly_reset_mins = doc["wr"] | -1;
+    // Weekly scoped-model limits ("ws": [{"n":"Fable","p":4}, ...]). Absent
+    // key (no scoped limits / old daemon) → count 0 and the Weekly card keeps
+    // its single bar; 0% is a real reading, never a "hidden" sentinel.
+    out->scoped_weekly_count = 0;
+    for (JsonObject lim : doc["ws"].as<JsonArray>()) {
+        if (out->scoped_weekly_count >= MAX_SCOPED_WEEKLY) break;
+        const char* n = lim["n"] | "";
+        if (!n[0]) continue;
+        ScopedWeekly& sw = out->scoped_weekly[out->scoped_weekly_count++];
+        strlcpy(sw.name, n, sizeof(sw.name));
+        sw.pct = lim["p"] | 0.0f;
+    }
     strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
     out->chime = doc["c"] | false;   // absent (old daemon / chime off) → stay silent
     const char* acct = doc["acct"] | "pro";
@@ -174,6 +187,16 @@ static void check_serial_cmd() {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
+            // "page splash|usage|settings|about" — drive the screens over
+            // serial (QA on boards without the framebuffer screenshot).
+            else if (strncmp(cmd_buf, "page ", 5) == 0) {
+                const char* p = cmd_buf + 5;
+                if      (strcmp(p, "splash") == 0)   ui_show_screen(SCREEN_SPLASH);
+                else if (strcmp(p, "usage") == 0)    ui_show_screen(SCREEN_USAGE);
+                else if (strcmp(p, "settings") == 0) ui_show_screen(SCREEN_SETTINGS);
+                else if (strcmp(p, "about") == 0)    ui_show_screen(SCREEN_ABOUT);
+                Serial.printf("page -> %s\n", p);
+            }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -198,6 +221,7 @@ void setup() {
     display_hal_begin();
     idle_init();        // takes over panel brightness and starts the idle timer
     brightness_init();  // load the user's saved brightness level and apply via idle
+    settings_init();    // user prefs (clock, header icons, sleep timeout) — pushes the idle timeout
 
     power_hal_init();
     imu_hal_init();
@@ -233,8 +257,14 @@ void setup() {
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
     ui_show_screen(SCREEN_SPLASH);
 
-    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
-        board_caps().name, W, H);
+    // Memory headroom after every widget exists — the PSRAM-less C6 is the
+    // board that would run out first, so make it visible on every boot.
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE... "
+                  "free heap %u B, LVGL pool %u%% used\n",
+        board_caps().name, W, H,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)mon.used_pct);
 }
 
 static ble_state_t last_ble_state = BLE_STATE_INIT;
@@ -345,7 +375,7 @@ void loop() {
                 // On splash: cycle animations. On the usage view: cycle
                 // screen brightness (single non-splash view, no more screens).
                 if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          brightness_cycle();
+                else { brightness_cycle(); ui_refresh_settings(); }
             }
         }
 
@@ -390,6 +420,16 @@ void loop() {
             }
             ui_update(&usage);
             ble_send_ack();
+            // One line per payload so a serial log proves what the device saw
+            // (boards without the framebuffer screenshot rely on this).
+            Serial.printf("usage: s=%d%% w=%d%% scoped=%d%s%s%s clock=%s free=%u\n",
+                (int)(usage.session_pct + 0.5f), (int)(usage.weekly_pct + 0.5f),
+                usage.scoped_weekly_count,
+                usage.scoped_weekly_count ? " (" : "",
+                usage.scoped_weekly_count ? usage.scoped_weekly[0].name : "",
+                usage.scoped_weekly_count ? ")" : "",
+                usage.clock_epoch ? "yes" : "no",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         } else {
             ble_send_nack();
         }

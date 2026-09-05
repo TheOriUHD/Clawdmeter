@@ -18,6 +18,7 @@ static uint32_t fade_last_step_ms = 0;
 static uint8_t  fade_from = DISPLAY_DEFAULT_BRIGHTNESS;
 static uint8_t  fade_to   = 0;
 static uint8_t  awake_brightness = DISPLAY_DEFAULT_BRIGHTNESS;  // user-set "full" level (brightness.cpp)
+static uint32_t idle_timeout_ms  = IDLE_TIMEOUT_MS;             // 0 = never (settings.cpp)
 
 static void apply_brightness(uint8_t b) {
     display_hal_set_brightness(b);
@@ -41,6 +42,15 @@ void idle_set_awake_brightness(uint8_t level) {
     // Apply now if fully awake so a button press is visible immediately;
     // during fades/sleep the next fade-in picks it up.
     if (state == STATE_AWAKE) apply_brightness(level);
+}
+
+void idle_set_timeout_ms(uint32_t ms) {
+    idle_timeout_ms = ms;
+    last_activity_ms = millis();
+    if (ms == 0 && (state == STATE_ASLEEP || state == STATE_FADING_OUT)) {
+        begin_fade(awake_brightness, last_activity_ms);
+        state = STATE_FADING_IN;
+    }
 }
 
 void idle_note_activity(void) {
@@ -90,7 +100,7 @@ void idle_tick(void) {
 
     switch (state) {
     case STATE_AWAKE:
-        if (now - last_activity_ms >= IDLE_TIMEOUT_MS) {
+        if (idle_timeout_ms != 0 && now - last_activity_ms >= idle_timeout_ms) {
             begin_fade(0, now);
             state = STATE_FADING_OUT;
         }
