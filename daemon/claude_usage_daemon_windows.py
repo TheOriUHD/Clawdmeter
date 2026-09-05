@@ -33,6 +33,7 @@ REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 
 POLL_INTERVAL = 60
 TICK = 5
+HOST_BATT_CHECK_S = 10   # PowerShell/CIM is slow; still far quicker than the 60 s poll
 CONNECT_RETRIES = 3        # D-01: attempts before giving up on a device
 CONNECT_RETRY_DELAY = 2.0  # D-01: seconds between failed connect attempts
 ZOMBIE_BREAK_LIMIT = 1     # D-03: consecutive write failures before abandoning a half-open link
@@ -204,14 +205,36 @@ def read_host_battery() -> tuple[int, bool] | None:
     return parse_win32_battery(out.stdout)
 
 
-def add_host_battery_fields(payload: dict) -> None:
+def host_battery_state() -> tuple[int, bool] | None:
     if read_host_battery_setting() != "on":
-        return
-    hb = read_host_battery()
+        return None
+    return read_host_battery()
+
+
+def add_host_battery_fields(payload: dict) -> None:
+    hb = host_battery_state()
     if hb is None:
         return
     payload["hb"] = hb[0]
     payload["hc"] = 1 if hb[1] else 0
+
+
+def payload_battery_state(payload: dict) -> tuple[int, bool] | None:
+    if "hb" not in payload:
+        return None
+    return int(payload["hb"]), bool(payload.get("hc"))
+
+
+def host_battery_beat(last_payload: dict, state: tuple[int, bool] | None) -> dict:
+    """Last usage payload re-stamped with the current host battery (see the macOS daemon)."""
+    beat = dict(last_payload)
+    beat.pop("hb", None)
+    beat.pop("hc", None)
+    if state is not None:
+        beat["hb"] = state[0]
+        beat["hc"] = 1 if state[1] else 0
+    add_clock_fields(beat)
+    return beat
 
 
 def add_chime_field(payload: dict) -> None:
@@ -801,10 +824,22 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
             return True
         return False
 
+    last_payload = None
+    last_batt = None
+    last_batt_check = 0.0
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
             elapsed = now - last_poll
+            if last_payload is not None and now - last_batt_check >= HOST_BATT_CHECK_S \
+                    and not (session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL):
+                # Between polls: push the host battery the moment it changes.
+                last_batt_check = now
+                state = host_battery_state()
+                if state != last_batt:
+                    log(f"Host battery {last_batt} -> {state}; pushing now")
+                    if await session.write_payload(host_battery_beat(last_payload, state)):
+                        last_batt = state
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
                 # Pure free-ride: read whatever access token Claude Code currently
@@ -847,6 +882,9 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                         if await session.write_payload(payload):
                             last_poll = time.time()
                             used_successfully = True
+                            last_payload = payload
+                            last_batt = payload_battery_state(payload)
+                            last_batt_check = last_poll
                             consecutive_failures = 0  # D-03: reset on success
                             if tray_state:
                                 tray_state.set_connected(time.time())
