@@ -31,9 +31,11 @@ from bleak.exc import BleakError
 try:
     import companion as cc_mod
     import trend as trend_mod
+    import tokenkeeper as tk_mod
 except ImportError:  # pragma: no cover - package import path
     from . import companion as cc_mod
     from . import trend as trend_mod
+    from . import tokenkeeper as tk_mod
 
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
@@ -227,6 +229,12 @@ def read_companion_bind() -> str:
 
 def read_trend_setting() -> str:
     v = (_config_value("trend") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
+def read_token_keeper_setting() -> str:
+    """`token_keeper` config option: on|off (default on) — see tokenkeeper.py."""
+    v = (_config_value("token_keeper") or "on").lower()
     return v if v in ("on", "off") else "on"
 
 
@@ -833,6 +841,32 @@ def read_token() -> str | None:
     return None
 
 
+def read_token_expiry_s() -> float | None:
+    """When the stored token expires (seconds since the epoch), or None if unknown."""
+    for path in _windows_credential_candidates():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        oauth = data.get("claudeAiOauth", data) if isinstance(data, dict) else {}
+        exp = oauth.get("expiresAt") if isinstance(oauth, dict) else None
+        if isinstance(exp, (int, float)) and exp > 0:
+            return exp / 1000.0 if exp > 1e11 else float(exp)
+        return None
+    return None
+
+
+TOKEN_KEEPER = tk_mod.TokenKeeper(cwd=CONFIG_FILE.parent, log=log)
+
+
+async def keep_token_fresh(reason: str) -> bool:
+    """Let Claude Code renew its stored token (once per cooldown) when it is
+    expiring or was just rejected. Off with `token_keeper = off`."""
+    if read_token_keeper_setting() != "on":
+        return False
+    return await TOKEN_KEEPER.run(reason)
+
+
 def _read_expiry() -> str:
     """Return human-readable expiry from the first-hit credentials file.
 
@@ -990,6 +1024,12 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                 # does all refreshing; refreshing here would race its rotation and feed
                 # the OAuth endpoint's rate limit (429). When the token is dead we just
                 # show "No data" until the CLI re-seeds it.
+                # The stored token lives ~8 h and only Claude Code renews it;
+                # nudge it before expiry (see tokenkeeper.py) so a desktop-app-only
+                # user never sees "No data".
+                exp = read_token_expiry_s()
+                if tk_mod.due(exp) and TOKEN_KEEPER.can_run():
+                    await keep_token_fresh("stored token expires soon" if exp and exp > now else "stored token expired")
                 token = read_token()  # D-09: fresh each cycle
                 if not token:
                     log("No token; signalling no-data to device")
@@ -1017,12 +1057,24 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                             payload = finalize_payload(payload)    # + "tr" history, + "cc" companion
                     except AuthError:
                         # Pure free-ride: we never refresh. A 401/403 means Claude Code's
-                        # token has expired and only Claude Code (its owner) can re-seed it.
+                        # token has expired and only Claude Code (its owner) can re-seed it
+                        # — so ask it to, once, and retry before giving up on this cycle.
                         expired = True
-                        log("Token expired/invalid; signalling no-data — run `claude login` "
-                            "or use the CLI to let Claude Code renew it")
-                        if tray_state:
-                            tray_state.set_error("token expired — run claude login")
+                        if await keep_token_fresh("token rejected (401)"):
+                            fresh = read_token()
+                            if fresh:
+                                try:
+                                    payload = await poll_usage_endpoint(fresh) or await poll_api(fresh)
+                                    if payload is not None:
+                                        payload = finalize_payload(payload)
+                                        expired = False
+                                except AuthError:
+                                    pass
+                        if expired:
+                            log("Token expired/invalid; signalling no-data — run `claude login` "
+                                "or use the CLI to let Claude Code renew it")
+                            if tray_state:
+                                tray_state.set_error("token expired — run claude login")
                     if payload is not None:
                         if await session.write_payload(payload):
                             last_poll = time.time()
