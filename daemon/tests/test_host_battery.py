@@ -71,3 +71,36 @@ def test_windows_parse():
     assert win.parse_win32_battery("40 6\n") == (40, True)      # charging
     assert win.parse_win32_battery("") is None
     assert win.parse_win32_battery("x y") is None
+
+
+# --- instant battery beats between usage polls ---------------------------------
+
+def test_beat_restamps_battery_and_clock_but_keeps_usage(tmp_path):
+    last = {"s": 35, "w": 9, "ws": [{"n": "Fable", "p": 18}], "ok": True, "hb": 71, "hc": 0, "t": 1, "tf": 24}
+    with patch.object(mac, "add_clock_fields", lambda p: p.update({"t": 999, "tf": 24})):
+        beat = mac.host_battery_beat(last, (72, True))
+    assert beat["hb"] == 72 and beat["hc"] == 1
+    assert beat["s"] == 35 and beat["w"] == 9 and beat["ws"] == last["ws"] and beat["ok"] is True
+    assert beat["t"] == 999                      # clock re-stamped
+    assert last["hb"] == 71                      # original untouched
+
+
+def test_beat_drops_battery_when_it_disappears():
+    with patch.object(mac, "add_clock_fields", lambda p: None):
+        beat = mac.host_battery_beat({"s": 1, "hb": 50, "hc": 1}, None)
+    assert "hb" not in beat and "hc" not in beat and beat["s"] == 1
+
+
+def test_payload_battery_state_shape():
+    assert mac.payload_battery_state({"hb": 71, "hc": 0}) == (71, False)
+    assert mac.payload_battery_state({"hb": 5, "hc": 1}) == (5, True)
+    assert mac.payload_battery_state({"s": 1}) is None
+    # a real reading compares equal to what the payload carried → no spurious push
+    assert mac.payload_battery_state({"hb": 71, "hc": 0}) == (71, False)
+
+
+def test_windows_beat_parity():
+    with patch.object(win, "add_clock_fields", lambda p: None):
+        beat = win.host_battery_beat({"s": 2, "hb": 10, "hc": 0}, (11, True))
+    assert (beat["hb"], beat["hc"], beat["s"]) == (11, 1, 2)
+    assert win.payload_battery_state({"hb": 10, "hc": 1}) == (10, True)

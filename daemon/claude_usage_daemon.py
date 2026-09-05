@@ -32,7 +32,8 @@ RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 
 POLL_INTERVAL = 60
-TICK = 5
+TICK = 2                 # inner-loop tick: link check + host-battery watch
+HOST_BATT_CHECK_S = 2    # a plug/unplug reaches the device within about this long
 CONNECT_TIMEOUT = 20.0
 
 # macOS: token lives in Keychain (service "Claude Code-credentials").
@@ -414,15 +415,46 @@ def read_host_battery() -> tuple[int, bool] | None:
     return parse_pmset_batt(out.stdout)
 
 
+def host_battery_state() -> tuple[int, bool] | None:
+    """(percent, charging) as the payload would carry it; None = disabled / no battery."""
+    if read_host_battery_setting() != "on":
+        return None
+    return read_host_battery()
+
+
 def add_host_battery_fields(payload: dict) -> None:
     """Add "hb"/"hc" (host battery percent / charging) unless disabled or absent."""
-    if read_host_battery_setting() != "on":
-        return
-    hb = read_host_battery()
+    hb = host_battery_state()
     if hb is None:
         return
     payload["hb"] = hb[0]
     payload["hc"] = 1 if hb[1] else 0
+
+
+def payload_battery_state(payload: dict) -> tuple[int, bool] | None:
+    """The host battery a payload carries, in host_battery_state() shape."""
+    if "hb" not in payload:
+        return None
+    return int(payload["hb"]), bool(payload.get("hc"))
+
+
+def host_battery_beat(last_payload: dict, state: tuple[int, bool] | None) -> dict:
+    """The last usage payload re-stamped with the current host battery.
+
+    Battery changes (plugging in, a percent step) must not wait for the 60 s
+    usage poll: the inner loop watches the host battery every
+    HOST_BATT_CHECK_S and, on a change, re-sends the last usage numbers with
+    fresh "hb"/"hc" (and a fresh clock) so the device updates within seconds.
+    The numbers are unchanged, so the device just re-renders them.
+    """
+    beat = dict(last_payload)
+    beat.pop("hb", None)
+    beat.pop("hc", None)
+    if state is not None:
+        beat["hb"] = state[0]
+        beat["hc"] = 1 if state[1] else 0
+    add_clock_fields(beat)
+    return beat
 
 
 def add_chime_field(payload: dict) -> None:
@@ -982,6 +1014,9 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
 
     last_poll = 0.0
     used_successfully = False
+    last_payload: dict | None = None            # last usage payload that reached the device
+    last_batt: tuple[int, bool] | None = None   # host battery it carried
+    last_batt_check = 0.0
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
@@ -1000,6 +1035,9 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     if await session.write_payload(payload):
                         last_poll = time.time()
                         used_successfully = True
+                        last_payload = payload
+                        last_batt = payload_battery_state(payload)
+                        last_batt_check = last_poll
                 elif dead:
                     # No live token in any config dir (missing, or a 401/expired
                     # token) -> show "No data" now instead of stale numbers. Guard
@@ -1014,6 +1052,14 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     # Transient poll failure (a live token that didn't answer this
                     # cycle) -> stay silent and retry next tick.
                     log("No usable config dir this cycle")
+            elif last_payload is not None and now - last_batt_check >= HOST_BATT_CHECK_S:
+                # Between polls: push the host battery the moment it changes.
+                last_batt_check = now
+                state = host_battery_state()
+                if state != last_batt:
+                    log(f"Host battery {last_batt} -> {state}; pushing now")
+                    if await session.write_payload(host_battery_beat(last_payload, state)):
+                        last_batt = state
 
             try:
                 await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
