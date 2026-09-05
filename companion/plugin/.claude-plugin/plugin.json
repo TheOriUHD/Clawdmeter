@@ -1,0 +1,19 @@
+{
+  "name": "clawdmeter-companion",
+  "displayName": "Clawdmeter Companion",
+  "version": "1.0.0",
+  "description": "Streams what Claude Code is doing (thinking, running tools, needs you, done) to a Clawdmeter desk display via its daemon.",
+  "author": {
+    "name": "TheOriUHD",
+    "url": "https://github.com/TheOriUHD/Clawdmeter"
+  },
+  "homepage": "https://github.com/TheOriUHD/Clawdmeter#companion",
+  "repository": "https://github.com/TheOriUHD/Clawdmeter",
+  "license": "MIT",
+  "keywords": [
+    "clawdmeter",
+    "desk-display",
+    "status",
+    "hooks"
+  ]
+}

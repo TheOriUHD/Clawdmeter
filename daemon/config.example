@@ -40,3 +40,32 @@ clock = auto
 #   on  = send it (default)
 #   off = never send it
 host_battery = on
+
+# Claude Code companion — live session state on the device. Claude Code hooks
+# post each event (prompt sent, tool running, permission needed, turn done) to
+# the daemon, which forwards a compact state to the device: the status line
+# reads what Claude is doing, the Working page slides in, and the device glows
+# and chimes when Claude needs you. Install the hooks with
+#   python3 companion/install-hooks.py          (this machine)
+#   curl -fsSL https://raw.githubusercontent.com/TheOriUHD/Clawdmeter/main/companion/install-hooks.sh | sh
+#                                               (a machine you ssh into; add
+#                                                `RemoteForward 47393 127.0.0.1:47393`
+#                                                to that host in ~/.ssh/config)
+# or as a Claude Code plugin: `claude plugin marketplace add TheOriUHD/Clawdmeter`
+# then `claude plugin install clawdmeter-companion@clawdmeter`.
+#   on  = listen for hook events (default)
+#   off = no listener, no companion data
+companion = on
+# Where the listener accepts hook posts. Loopback only by default — remote
+# machines reach it through an SSH tunnel. Bind 0.0.0.0 only on a trusted LAN
+# (Tailscale etc.) and point remote hooks at http://<this-mac>:47393 with
+# `install-hooks.py --url`.
+companion_port = 47393
+companion_bind = 127.0.0.1
+
+# Trend page — record every poll (session %, weekly %) so the device can draw
+# the last 24 hours and the last 7 days. History lives next to this file in
+# history.json (eight days, pruned automatically).
+#   on  = record and send (default)
+#   off = no history, no Trend data
+trend = on
