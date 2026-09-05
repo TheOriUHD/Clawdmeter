@@ -29,12 +29,21 @@ enum SleepMode : uint8_t {
     SLEEP_MODE_COUNT,
 };
 
+// Weekly card: how often it flips between its faces (all models / Fable …).
+enum FaceFlip : uint8_t {
+    FLIP_OFF = 0,      // stays on the default face; a tap picks (and keeps) a face
+    FLIP_3S, FLIP_5S, FLIP_7S, FLIP_10S, FLIP_15S, FLIP_30S,
+    FLIP_MODE_COUNT,
+};
+
 struct Settings {
     uint8_t clock;          // ClockMode
     bool    show_battery;   // battery glyph in the header (boards with a PMU)
     bool    show_mascot;    // corner Clawd in the header
     bool    show_status;    // the "✻ Thinking…" ticker at the bottom
     uint8_t sleep;          // SleepMode
+    uint8_t face_flip;      // FaceFlip
+    uint8_t face_default;   // Weekly card face shown first / when not flipping: 0 = all models, i = scoped limit i
 };
 
 void            settings_init(void);   // load from NVS, apply the sleep timeout
@@ -45,7 +54,11 @@ void settings_set_show_battery(bool v);
 void settings_set_show_mascot(bool v);
 void settings_set_show_status(bool v);
 void settings_set_sleep(uint8_t mode);
+void settings_set_face_flip(uint8_t mode);
+void settings_set_face_default(uint8_t face);
 
 uint32_t    settings_sleep_timeout_ms(void);   // 0 = never sleep
+uint32_t    settings_face_flip_ms(void);       // 0 = no automatic flipping
 const char* settings_clock_label(uint8_t mode);
 const char* settings_sleep_label(uint8_t mode);
+const char* settings_face_flip_label(uint8_t mode);

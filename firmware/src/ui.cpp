@@ -333,8 +333,10 @@ static lv_obj_t* lbl_anim;      // status line: connection state + whimsical idl
 // card gets FACES instead: face 0 is the classic all-models card, face i the
 // identical card for scoped model i — same number, pill, bar and reset line,
 // so the extra limit looks exactly like the rest of the screen. Small dots on
-// the reset row show how many faces there are; the card auto-advances every
-// FACE_AUTO_MS and a tap on the card flips it at once (then holds a while).
+// the reset row show how many faces there are; the card auto-advances at the
+// user's "Flip every" interval (Settings → Weekly card; Off = never) and a tap
+// flips it at once — holding a while when flipping, or becoming the new
+// default face when not.
 // Plans without a scoped limit have one face, no dots, and the card is
 // pixel-identical to the original.
 static ScopedWeekly cached_scoped[MAX_SCOPED_WEEKLY];
@@ -342,21 +344,25 @@ static int       cached_scoped_count = 0;
 static float     cached_weekly_pct = 0;
 static int       cached_weekly_reset = -1;
 static int       weekly_face = 0;           // 0 = all models, i = cached_scoped[i-1]
-static uint32_t  face_next_auto_ms = 0;     // lv_tick of the next automatic flip
+static uint32_t  face_next_auto_ms = 0;     // lv_tick of the next automatic flip (0 = none scheduled)
 static lv_obj_t* face_dots[MAX_SCOPED_WEEKLY + 1];
-#define FACE_AUTO_MS 7000
-#define FACE_HOLD_MS 20000                  // after a tap, keep the chosen face this long
+// The flip interval and the default face are user settings (Settings → Weekly
+// card). With flipping off, a tap picks a face and the pick is remembered.
+#define FACE_HOLD_MS 20000                  // after a tap while flipping: keep the chosen face this long
 
 // ---- Settings: three swipeable pages of real controls ----
 //   Page 0  Clock (segmented picker, sliding highlight) · Battery icon · Mascot (toggles)
 //   Page 1  Brightness (slider, live preview) · Sleep after (stepped slider) ·
 //           Status line (toggle) · Pairing (button, two taps)
-//   Page 2  About (device info)
+//   Page 2  Weekly card: Default face (picker built from the live limits) ·
+//           Flip every (stepped slider, Off … 30 s)
+//   Page 3  About (device info)
 // Pages slide horizontally on swipe; the terra-cotta accent is the one
 // "active" colour across every control so they read as a family.
 static lv_obj_t* settings_container = nullptr;
-#define SET_PAGES 3
-#define PAGE_ABOUT 2
+#define SET_PAGES 4
+#define PAGE_FACE  2
+#define PAGE_ABOUT 3
 static lv_obj_t* settings_pages[SET_PAGES];
 static lv_obj_t* page_dots[SET_PAGES];
 static int       settings_page = 0;
@@ -376,6 +382,18 @@ static lv_obj_t* sl_brightness = nullptr;
 static lv_obj_t* lbl_brightness = nullptr;
 static lv_obj_t* sl_sleep = nullptr;
 static lv_obj_t* lbl_sleep = nullptr;
+
+// Weekly card page: default-face picker (segments follow the live limits) + flip slider
+#define FACE_SEG_MAX (1 + MAX_SCOPED_WEEKLY)
+static lv_obj_t* face_seg_tile = nullptr;
+static lv_obj_t* face_seg_hl = nullptr;
+static lv_obj_t* face_seg_obj[FACE_SEG_MAX];
+static lv_obj_t* face_seg_lbl[FACE_SEG_MAX];
+static int16_t   face_seg_x[FACE_SEG_MAX];
+static int       face_seg_count = 1;
+static lv_obj_t* face_preview = nullptr;
+static lv_obj_t* sl_flip = nullptr;
+static lv_obj_t* lbl_flip = nullptr;
 
 // Pairing button
 static lv_obj_t* pair_button = nullptr;
@@ -772,10 +790,28 @@ static void render_weekly_face(bool animate) {
     }
 }
 
+static int default_face_clamped(void) {
+    const int f = settings_get().face_default;
+    return f <= cached_scoped_count ? f : 0;
+}
+
+// (Re)arm the automatic flip from now, or disarm it when flipping is off.
+static void schedule_face_flip(uint32_t from_now_ms) {
+    const uint32_t iv = settings_face_flip_ms();
+    face_next_auto_ms = (iv && cached_scoped_count > 0) ? lv_tick_get() + from_now_ms : 0;
+}
+
 static void flip_weekly_face(uint32_t hold_ms) {
     if (cached_scoped_count <= 0) return;
     weekly_face = (weekly_face + 1) % (1 + cached_scoped_count);
-    face_next_auto_ms = lv_tick_get() + hold_ms;
+    if (settings_face_flip_ms() == 0) {
+        // Not flipping automatically: the tap IS the choice — remember it.
+        settings_set_face_default((uint8_t)weekly_face);
+        face_next_auto_ms = 0;
+        refresh_settings_controls(false);
+    } else {
+        face_next_auto_ms = lv_tick_get() + hold_ms;
+    }
     render_weekly_face(false);
 }
 
@@ -1125,6 +1161,110 @@ static void render_pairing_button(void) {
     }
 }
 
+// --- Weekly card page ---
+static void face_seg_click_cb(lv_event_t* e) {
+    if (click_guarded()) return;
+    const int face = (int)(intptr_t)lv_event_get_user_data(e);
+    if (face >= face_seg_count) return;
+    settings_set_face_default((uint8_t)face);
+    weekly_face = face;
+    if (cached_scoped_count > 0) render_weekly_face(false);
+    schedule_face_flip(settings_face_flip_ms());
+    refresh_settings_controls(true);
+}
+
+static void flip_slider_cb(lv_event_t* e) {
+    const lv_event_code_t code = lv_event_get_code(e);
+    const int idx = (int)lv_slider_get_value(sl_flip);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_label_set_text(lbl_flip, settings_face_flip_label((uint8_t)idx));
+        lv_obj_set_style_text_color(lbl_flip, idx == FLIP_OFF ? COL_DIM : COL_TEXT, 0);
+    } else if (code == LV_EVENT_RELEASED) {
+        settings_set_face_flip((uint8_t)idx);
+        weekly_face = default_face_clamped();
+        if (cached_scoped_count > 0) render_weekly_face(false);
+        schedule_face_flip(settings_face_flip_ms());
+    }
+}
+
+// Lay the picker's segments out for the faces the plan actually has (Weekly +
+// each scoped limit, labelled with the API's own names) and move the highlight.
+static void layout_face_segments(bool animate) {
+    if (!face_seg_tile) return;
+    face_seg_count = 1 + cached_scoped_count;
+    const int inner_w = L.content_w - 2 * L.tile_pad_x;
+    const int seg_w = (inner_w - (face_seg_count - 1) * L.seg_gap) / face_seg_count;
+    const int seg_y = L.wide_tile_h - 2 * L.tile_pad_y - L.seg_h;
+    for (int i = 0; i < FACE_SEG_MAX; i++) {
+        if (i < face_seg_count) {
+            face_seg_x[i] = i * (seg_w + L.seg_gap);
+            lv_obj_set_pos(face_seg_obj[i], face_seg_x[i], seg_y);
+            lv_obj_set_size(face_seg_obj[i], seg_w, L.seg_h);
+            lv_label_set_text(face_seg_lbl[i], i == 0 ? "Weekly" : cached_scoped[i - 1].name);
+            lv_obj_clear_flag(face_seg_obj[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(face_seg_obj[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    const int sel = default_face_clamped();
+    lv_obj_set_size(face_seg_hl, seg_w, L.seg_h);
+    lv_obj_set_y(face_seg_hl, seg_y);
+    if (animate) animate_x(face_seg_hl, face_seg_x[sel], ANIM_SEG_MS, NULL);
+    else         lv_obj_set_x(face_seg_hl, face_seg_x[sel]);
+    for (int i = 0; i < face_seg_count; i++)
+        lv_obj_set_style_text_color(face_seg_lbl[i], i == sel ? COL_TEXT : COL_DIM, 0);
+
+    // Preview: the default face's current reading.
+    if (face_preview) {
+        if (!data_received) {
+            lv_label_set_text(face_preview, "---");
+            lv_obj_set_style_text_color(face_preview, COL_DIM, 0);
+        } else {
+            const float pct = sel == 0 ? cached_weekly_pct : cached_scoped[sel - 1].pct;
+            lv_label_set_text_fmt(face_preview, "%d%%", (int)(pct + 0.5f));
+            lv_obj_set_style_text_color(face_preview, COL_TEXT, 0);
+        }
+    }
+}
+
+static void build_face_page(lv_obj_t* page) {
+    const int inner_w = L.content_w - 2 * L.tile_pad_x;
+    face_seg_tile = make_tile(page, L.margin, 0, L.content_w, L.wide_tile_h, false);
+    tile_label(face_seg_tile, "Default face");
+    face_preview = tile_value_label(face_seg_tile);
+
+    face_seg_hl = lv_obj_create(face_seg_tile);
+    lv_obj_set_style_radius(face_seg_hl, L.seg_radius, 0);
+    lv_obj_set_style_border_width(face_seg_hl, 0, 0);
+    lv_obj_set_style_bg_color(face_seg_hl, COL_ACCENT, 0);
+    lv_obj_set_style_bg_opa(face_seg_hl, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(face_seg_hl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(face_seg_hl, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < FACE_SEG_MAX; i++) {
+        lv_obj_t* seg = lv_obj_create(face_seg_tile);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(seg, 0, 0);
+        lv_obj_set_style_pad_all(seg, 0, 0);
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(seg, face_seg_click_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        face_seg_obj[i] = seg;
+        face_seg_lbl[i] = lv_label_create(seg);
+        lv_label_set_text(face_seg_lbl[i], "");
+        lv_obj_set_style_text_font(face_seg_lbl[i], L.ctrl_font, 0);
+        lv_obj_center(face_seg_lbl[i]);
+    }
+
+    const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
+    lv_obj_t* tf = make_tile(page, L.margin, L.wide_tile_h + L.tile_gap, L.content_w, L.slider_tile_h, false);
+    tile_label(tf, "Flip every");
+    lbl_flip = tile_value_label(tf);
+    sl_flip = make_slider(tf, slider_y, inner_w, 0, FLIP_MODE_COUNT - 1);
+    lv_obj_add_event_cb(sl_flip, flip_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(sl_flip, flip_slider_cb, LV_EVENT_RELEASED, NULL);
+
+    layout_face_segments(false);
+}
+
 static void build_about_page(lv_obj_t* page) {
     const int rows_h = ABOUT_COUNT * L.about_row_h;
     lv_obj_t* panel = make_panel(page, L.margin, 0, L.content_w,
@@ -1243,7 +1383,10 @@ static void build_settings_screen(void) {
         lv_obj_add_event_cb(t4, pairing_tile_cb, LV_EVENT_CLICKED, NULL);
     }
 
-    // ---- Page 2: About ----
+    // ---- Page 2: Weekly card (default face + flip interval) ----
+    build_face_page(settings_pages[PAGE_FACE]);
+
+    // ---- Page 3: About ----
     build_about_page(settings_pages[PAGE_ABOUT]);
 
     // Page indicator dots, centred under the tile area.
@@ -1293,6 +1436,12 @@ static void refresh_settings_controls(bool animate) {
     lv_slider_set_value(sl_sleep, s.sleep, animate ? LV_ANIM_ON : LV_ANIM_OFF);
     lv_label_set_text(lbl_sleep, settings_sleep_label(s.sleep));
     lv_obj_set_style_text_color(lbl_sleep, s.sleep == SLEEP_NEVER ? COL_DIM : COL_TEXT, 0);
+    if (sl_flip) {
+        lv_slider_set_value(sl_flip, s.face_flip, animate ? LV_ANIM_ON : LV_ANIM_OFF);
+        lv_label_set_text(lbl_flip, settings_face_flip_label(s.face_flip));
+        lv_obj_set_style_text_color(lbl_flip, s.face_flip == FLIP_OFF ? COL_DIM : COL_TEXT, 0);
+    }
+    layout_face_segments(animate);
     render_pairing_button();
 }
 
@@ -1435,18 +1584,31 @@ void ui_update(const UsageData* data) {
     // one face, classic card; 0% is a real reading. Enterprise has no weekly
     // window at all. While faces exist the Weekly card handles its own taps
     // (flip) instead of bubbling them up to the splash toggle.
+    if (!data->enterprise) {
+        cached_weekly_pct = data->weekly_pct;
+        cached_weekly_reset = data->weekly_reset_mins;
+    }
+    const int prev_scoped = cached_scoped_count;
     cached_scoped_count = data->enterprise ? 0 : data->scoped_weekly_count;
     for (int i = 0; i < cached_scoped_count; i++) cached_scoped[i] = data->scoped_weekly[i];
     if (weekly_face > cached_scoped_count) weekly_face = 0;
     if (cached_scoped_count > 0) {
         lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_set_style_bg_color(panel_weekly, COL_PRESSED, LV_STATE_PRESSED);
-        if (face_next_auto_ms == 0) face_next_auto_ms = last_data_ms + FACE_AUTO_MS;
+        if (prev_scoped == 0) {                       // faces just appeared: start on the default
+            weekly_face = default_face_clamped();
+            schedule_face_flip(settings_face_flip_ms());
+        } else if (settings_face_flip_ms() == 0) {
+            face_next_auto_ms = 0;
+        } else if (face_next_auto_ms == 0) {
+            schedule_face_flip(settings_face_flip_ms());
+        }
     } else {
         lv_obj_add_flag(panel_weekly, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_set_style_bg_color(panel_weekly, COL_PANEL, LV_STATE_PRESSED);
         face_next_auto_ms = 0;
     }
+    const bool faces_changed = (prev_scoped != cached_scoped_count);
 
     char buf[48];
 
@@ -1486,9 +1648,15 @@ void ui_update(const UsageData* data) {
                  pace_hex, pace_text, data->reset_date);
         lv_label_set_text(lbl_weekly_reset, buf);
     } else {
-        cached_weekly_pct = data->weekly_pct;
-        cached_weekly_reset = data->weekly_reset_mins;
         render_weekly_face(true);
+    }
+
+    // Keep the Weekly-card settings page truthful: rebuild its picker when the
+    // set of faces changed, and refresh the preview reading on every payload
+    // while that page is on show.
+    if (settings_container) {
+        if (faces_changed) refresh_settings_controls(false);
+        else if (current_screen == SCREEN_SETTINGS && settings_page == PAGE_FACE) layout_face_segments(false);
     }
 }
 
@@ -1594,10 +1762,12 @@ void ui_tick_anim(void) {
     render_title(false);
 
     // Weekly card: advance the face on its own clock (a tap resets the clock
-    // with a longer hold, see weekly_click_cb). Only while actually on show.
+    // with a longer hold, see weekly_click_cb). Only while actually on show,
+    // and only when the user has automatic flipping on.
     if (current_screen == SCREEN_USAGE && cached_scoped_count > 0 && view_state == 2 &&
         face_next_auto_ms && (int32_t)(now - face_next_auto_ms) >= 0) {
-        flip_weekly_face(FACE_AUTO_MS);
+        const uint32_t iv = settings_face_flip_ms();
+        if (iv) flip_weekly_face(iv); else face_next_auto_ms = 0;
     }
 
     if (now - anim_msg_start >= ANIM_MSG_MS) {
