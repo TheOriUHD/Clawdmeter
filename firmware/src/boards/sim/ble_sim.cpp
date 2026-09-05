@@ -27,6 +27,7 @@ static bool     playing = true;
 static bool     connected = true;
 static bool     pending = false;      // a state is queued for main's next poll
 static uint32_t delivered_ms = 0;
+static bool     sim_flip_pending = false;   // "_sim":{"flip":true} seen; apply after main parsed it
 
 static const char* FALLBACK[] = {
     "{\"name\":\"fresh\",\"s\":3.0,\"sr\":295,\"w\":12.0,\"wr\":9000,\"st\":\"allowed\",\"ok\":true}",
@@ -93,6 +94,7 @@ void ble_init(void) {
 }
 
 void ble_tick(void) {
+    if (sim_flip_pending && !pending) { sim_flip_pending = false; ui_flip_weekly_face(); }
     if (!connected || pending || !playing || n_states == 0) return;
     if (millis() - delivered_ms >= states[cur].hold_ms) {
         cur = (cur + 1) % n_states;
@@ -118,10 +120,11 @@ bool ble_has_data(void) { return connected && pending; }
 // main.cpp's parse_json ignores the unknown "_sim" key.
 static void sim_apply_page(const char* p) {
     if (!p) return;
-    if      (strcmp(p, "splash") == 0)   ui_show_screen(SCREEN_SPLASH);
-    else if (strcmp(p, "usage") == 0)    ui_show_screen(SCREEN_USAGE);
-    else if (strcmp(p, "settings") == 0) ui_show_screen(SCREEN_SETTINGS);
-    else if (strcmp(p, "about") == 0)    ui_show_screen(SCREEN_ABOUT);
+    if      (strcmp(p, "splash") == 0)    ui_show_screen(SCREEN_SPLASH);
+    else if (strcmp(p, "usage") == 0)     ui_show_screen(SCREEN_USAGE);
+    else if (strcmp(p, "settings") == 0)  ui_show_settings_page(0);
+    else if (strcmp(p, "settings2") == 0) ui_show_settings_page(1);
+    else if (strcmp(p, "about") == 0)     ui_show_screen(SCREEN_ABOUT);
     else printf("[sim] unknown page '%s'\n", p);
 }
 
@@ -137,6 +140,10 @@ const char* ble_get_data(void) {
     if (deserializeJson(doc, states[cur].json) == DeserializationError::Ok) {
         const char* pg = doc["_sim"]["page"] | (const char*)NULL;
         if (pg) sim_apply_page(pg);
+        // "_sim":{"flip":true} — show the Weekly card's next face (Fable) so a
+        // headless capture can photograph it deterministically. Applied AFTER
+        // main parses this payload, via the deferred flag below.
+        sim_flip_pending = doc["_sim"]["flip"] | false;
     }
     return states[cur].json;
 }

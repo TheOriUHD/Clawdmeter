@@ -17,17 +17,22 @@ Shift+Tab over BLE HID for Claude Code's voice mode and mode-toggle shortcuts.
 makes the device more functional while keeping its design language intact:
 
 - **Fable limit.** Plans with a per-model weekly allowance (the "Fable" row in
-  Claude's own usage settings) get it on the Weekly card: a labelled sub-row
-  with its own bar and percentage, sharing the weekly reset. The label is the
-  API's display name, so any future scoped model rides along without a firmware
-  change. Plans without one render the classic card, pixel for pixel.
-- **On-device settings.** Swipe left on the Usage screen for a touch Settings
-  page — tap a row to cycle it, everything persists across reboots:
-  Clock (Off / Auto / 12h / 24h) · Battery icon · Mascot · Status line ·
-  Brightness · Sleep after (5 min … Never) · Pairing (two taps forget the
-  bonded host and re-advertise). Swipe left again for an About page (board,
-  firmware, Bluetooth state and address, battery, free RAM, uptime); swipe
-  right to go back. A tap still toggles the splash, as before.
+  Claude's own usage settings) get it as a second **face** of the Weekly card:
+  the identical full-size card — same number, pill, bar and reset line — for
+  the scoped model. Two dots on the reset row show the faces; the card flips on
+  its own every 7 s and **tapping the card flips it at once**. The label is the
+  API's display name, so a future scoped model rides along without a firmware
+  change. Plans without one have a single face and the classic card, pixel for
+  pixel. (A third full card doesn't fit a 480 px panel, and a shrunken row
+  looked like an afterthought — faces keep every limit at full size.)
+- **Touch-first settings.** Swipe left on the Usage screen for two pages of
+  2×2 **tiles** — each tile is one setting and one big button (≈17×13 mm on the
+  2.16" panel); tap it to cycle the value, everything persists across reboots.
+  Page 1: Clock (Off / Auto / 12h / 24h) · Battery icon · Mascot · Status line.
+  Page 2: Brightness · Sleep after (5 min … Never) · Pairing (two taps forget
+  the bonded host and re-advertise) · About (board, firmware, Bluetooth state
+  and address, battery, free RAM, uptime). Dots at the bottom show the page;
+  swipe right to go back. A tap on the Usage screen still toggles the splash.
 - **Token-free daemon.** The macOS and Windows daemons read the official
   `/api/oauth/usage` endpoint — the same data `claude /usage` renders — instead
   of spending a 1-token message per poll. A `429` benches the endpoint for 15
@@ -36,13 +41,13 @@ makes the device more functional while keeping its design language intact:
 - **Clock is a device setting.** The daemon now always sends the time
   (`clock = auto` by default; `12`/`24` force a format, `off` never sends it),
   and the device decides whether to show it.
-- **Serial QA hook.** `page splash|usage|settings|about` over the USB serial
-  console drives the screens on boards without the framebuffer screenshot
-  (the C6 ports).
+- **Serial QA hook.** `page splash|usage|settings|settings2|about` and `flip`
+  over the USB serial console drive the screens on boards without the
+  framebuffer screenshot (the C6 ports).
 
-|            Usage, Fable plan             |             Settings             |            About             |
-| :--------------------------------------: | :------------------------------: | :--------------------------: |
-| ![Fable](screenshots/usage_fable.png)    | ![Settings](screenshots/settings.png) | ![About](screenshots/about.png) |
+|      Weekly card, Fable face      |          Settings (page 1)          |          Settings (page 2)           |            About             |
+| :-------------------------------: | :---------------------------------: | :----------------------------------: | :--------------------------: |
+| ![Fable](screenshots/usage_fable.png) | ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![About](screenshots/about.png) |
 
 Wire format addition: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
 scoped-model limit (`n` label ≤ 15 chars, `p` percent). Absent key = no scoped
@@ -51,7 +56,7 @@ never send it.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe left on Usage for Settings, and again for About; swipe right to go back.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe left on Usage for the Settings tile pages (and on to About); swipe right to go back. On plans with a Fable limit, tap the Weekly card to flip between its faces.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |

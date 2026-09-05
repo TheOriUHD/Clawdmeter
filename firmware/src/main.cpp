@@ -187,16 +187,19 @@ static void check_serial_cmd() {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
-            // "page splash|usage|settings|about" — drive the screens over
-            // serial (QA on boards without the framebuffer screenshot).
+            // "page splash|usage|settings|settings2|about" and "flip" — drive
+            // the screens over serial (QA on boards without the framebuffer
+            // screenshot).
             else if (strncmp(cmd_buf, "page ", 5) == 0) {
                 const char* p = cmd_buf + 5;
-                if      (strcmp(p, "splash") == 0)   ui_show_screen(SCREEN_SPLASH);
-                else if (strcmp(p, "usage") == 0)    ui_show_screen(SCREEN_USAGE);
-                else if (strcmp(p, "settings") == 0) ui_show_screen(SCREEN_SETTINGS);
-                else if (strcmp(p, "about") == 0)    ui_show_screen(SCREEN_ABOUT);
+                if      (strcmp(p, "splash") == 0)    ui_show_screen(SCREEN_SPLASH);
+                else if (strcmp(p, "usage") == 0)     ui_show_screen(SCREEN_USAGE);
+                else if (strcmp(p, "settings") == 0)  ui_show_settings_page(0);
+                else if (strcmp(p, "settings2") == 0) ui_show_settings_page(1);
+                else if (strcmp(p, "about") == 0)     ui_show_screen(SCREEN_ABOUT);
                 Serial.printf("page -> %s\n", p);
             }
+            else if (strcmp(cmd_buf, "flip") == 0) ui_flip_weekly_face();
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
