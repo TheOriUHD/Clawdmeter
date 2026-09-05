@@ -12,6 +12,8 @@
 #define KEY_MASCOT  "mas"
 #define KEY_STATUS  "sta"
 #define KEY_SLEEP   "slp"
+#define KEY_FLIP    "flp"
+#define KEY_FACE    "fac"
 
 static Settings S = {
     .clock        = CLOCK_AUTO,
@@ -19,7 +21,11 @@ static Settings S = {
     .show_mascot  = true,
     .show_status  = true,
     .sleep        = SLEEP_30M,
+    .face_flip    = FLIP_7S,
+    .face_default = 0,
 };
+
+static const uint32_t FLIP_MS[FLIP_MODE_COUNT] = { 0, 3000, 5000, 7000, 10000, 15000, 30000 };
 
 static const uint32_t SLEEP_MS[SLEEP_MODE_COUNT] = {
     5UL * 60UL * 1000UL,
@@ -48,6 +54,8 @@ void settings_init(void) {
     uint8_t mas = p.getUChar(KEY_MASCOT,  0xFF);
     uint8_t sta = p.getUChar(KEY_STATUS,  0xFF);
     uint8_t slp = p.getUChar(KEY_SLEEP,   0xFF);
+    uint8_t flp = p.getUChar(KEY_FLIP,    0xFF);
+    uint8_t fac = p.getUChar(KEY_FACE,    0xFF);
     p.end();
 
     if (clk < CLOCK_MODE_COUNT) S.clock = clk;
@@ -55,11 +63,13 @@ void settings_init(void) {
     if (mas != 0xFF)            S.show_mascot  = mas != 0;
     if (sta != 0xFF)            S.show_status  = sta != 0;
     if (slp < SLEEP_MODE_COUNT) S.sleep = slp;
+    if (flp < FLIP_MODE_COUNT)  S.face_flip = flp;
+    if (fac != 0xFF && fac <= 4) S.face_default = fac;
 
     apply_sleep();
-    Serial.printf("Settings: clock=%s battery=%d mascot=%d status=%d sleep=%s\n",
+    Serial.printf("Settings: clock=%s battery=%d mascot=%d status=%d sleep=%s flip=%s face=%u\n",
         settings_clock_label(S.clock), S.show_battery, S.show_mascot, S.show_status,
-        settings_sleep_label(S.sleep));
+        settings_sleep_label(S.sleep), settings_face_flip_label(S.face_flip), S.face_default);
 }
 
 const Settings& settings_get(void) { return S; }
@@ -79,6 +89,35 @@ void settings_set_sleep(uint8_t mode) {
     S.sleep = mode;
     put_u8(KEY_SLEEP, mode);
     apply_sleep();
+}
+
+void settings_set_face_flip(uint8_t mode) {
+    if (mode >= FLIP_MODE_COUNT) mode = FLIP_7S;
+    S.face_flip = mode;
+    put_u8(KEY_FLIP, mode);
+}
+
+void settings_set_face_default(uint8_t face) {
+    if (face > 4) face = 0;
+    S.face_default = face;
+    put_u8(KEY_FACE, face);
+}
+
+uint32_t settings_face_flip_ms(void) {
+    return S.face_flip < FLIP_MODE_COUNT ? FLIP_MS[S.face_flip] : FLIP_MS[FLIP_7S];
+}
+
+const char* settings_face_flip_label(uint8_t mode) {
+    switch (mode) {
+    case FLIP_OFF: return "Off";
+    case FLIP_3S:  return "3 s";
+    case FLIP_5S:  return "5 s";
+    case FLIP_7S:  return "7 s";
+    case FLIP_10S: return "10 s";
+    case FLIP_15S: return "15 s";
+    case FLIP_30S: return "30 s";
+    default:       return "?";
+    }
 }
 
 uint32_t settings_sleep_timeout_ms(void) {
