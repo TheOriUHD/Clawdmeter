@@ -32,3 +32,8 @@ void ui_flip_weekly_face(void);
 
 // Show the Settings screen on a given tile page (0-based, clamped).
 void ui_show_settings_page(int page);
+
+// QA: run the committed vertical transition (dir +1 = up to Settings, -1 =
+// down to Usage) as if a finger had flicked it; ms overrides the snap time
+// (0 = default). Lets a serial session measure transition frame rates.
+void ui_debug_swipe(int dir, uint32_t ms);

@@ -25,14 +25,20 @@
 static UsageData usage = {};
 
 // ---- LVGL draw buffers (partial render mode) ----
-// PSRAM-equipped boards (S3) can comfortably hold larger strips. PSRAM-free
-// boards (e.g. ESP32-C6) allocate from internal SRAM, so we shrink the strip
-// — 480×20 RGB565 = 19 KB × 2 buffers = 38 KB, fits beside everything else.
+// PSRAM-equipped boards (S3) use two 40-line strips. PSRAM-free boards (the
+// ESP32-C6) render from internal SRAM with two 60-line strips (57.6 KB each).
+// Two matters: the board's display HAL may hand a strip to DMA and return at
+// once, so LVGL renders the next strip while the previous one is still being
+// pushed to the panel (it waits through display_hal_wait() only right before
+// the next flush). Tall strips matter too — every strip costs another walk of
+// the whole object tree, and the software renderer's style lookups dominate.
+// Measured on the C6 for a full transition frame: 24 short strips → 95 ms;
+// 4 tall synchronous strips → ~40 ms; overlapped strips → see `stats`.
 #ifdef BOARD_HAS_PSRAM
 #define BUF_LINES 40
 #define LV_BUF_CAPS (MALLOC_CAP_SPIRAM)
 #else
-#define BUF_LINES 20
+#define BUF_LINES 60
 #define LV_BUF_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #endif
 static uint16_t* buf1 = nullptr;
@@ -40,11 +46,49 @@ static uint16_t* buf2 = nullptr;
 
 static uint32_t my_tick(void) { return millis(); }
 
+// ---- Render statistics (serial "stats") ----
+// Frames = LVGL refresh cycles that actually drew something; ms = render +
+// flush wall time per frame. The C6 renders in software into small strips and
+// flushes each over a blocking QSPI write, so this is THE number to watch
+// when a full-screen transition feels choppy.
+static uint32_t stat_frames = 0, stat_ms_acc = 0, stat_ms_max = 0, stat_frame_start = 0;
+static uint32_t stat_flush_us = 0;           // time spent inside the panel flush
+static void refr_start_cb(lv_event_t* e) { (void)e; stat_frame_start = millis(); }
+static void refr_ready_cb(lv_event_t* e) {
+    (void)e;
+    const uint32_t d = millis() - stat_frame_start;
+    if (d < 2) return;                       // idle refresh, nothing drawn
+    stat_frames++;
+    stat_ms_acc += d;
+    if (d > stat_ms_max) stat_ms_max = d;
+}
+static void print_stats(void) {
+    Serial.printf("stats: frames=%lu avg=%lums (flush %lums) max=%lums free=%u\n",
+        (unsigned long)stat_frames,
+        (unsigned long)(stat_frames ? stat_ms_acc / stat_frames : 0),
+        (unsigned long)(stat_frames ? stat_flush_us / 1000 / stat_frames : 0),
+        (unsigned long)stat_ms_max, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    stat_frames = stat_ms_acc = stat_ms_max = stat_flush_us = 0;
+}
+
+// Hand the strip to the board. The HAL may return before the pixels are on
+// the panel (DMA); LVGL then keeps rendering into the other buffer and calls
+// my_flush_wait_cb() before it needs this one again. No lv_display_flush_ready()
+// here — LVGL clears the flushing flag itself after the wait callback returns.
 static void my_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
+    (void)disp;
     int32_t w = area->x2 - area->x1 + 1;
     int32_t h = area->y2 - area->y1 + 1;
+    const uint32_t t0 = micros();
     display_hal_draw_bitmap(area->x1, area->y1, w, h, (uint16_t*)px_map);
-    lv_display_flush_ready(disp);
+    stat_flush_us += micros() - t0;
+}
+
+static void my_flush_wait_cb(lv_display_t* disp) {
+    (void)disp;
+    const uint32_t t0 = micros();
+    display_hal_wait();
+    stat_flush_us += micros() - t0;
 }
 
 static void rounder_cb(lv_event_t* e) {
@@ -200,6 +244,17 @@ static void check_serial_cmd() {
                 Serial.printf("page -> %s\n", p);
             }
             else if (strcmp(cmd_buf, "flip") == 0) ui_flip_weekly_face();
+            // "swipe up|down [ms]" runs the vertical transition; "stats" prints
+            // and resets the frame counters (measure a transition's frame rate).
+            else if (strncmp(cmd_buf, "swipe ", 6) == 0) {
+                const char* a = cmd_buf + 6;
+                int dir = (strncmp(a, "up", 2) == 0) ? +1 : (strncmp(a, "down", 4) == 0) ? -1 : 0;
+                const char* sp = strchr(a, ' ');
+                uint32_t ms = sp ? (uint32_t)atoi(sp + 1) : 0;
+                if (dir) { stat_frames = stat_ms_acc = stat_ms_max = stat_flush_us = 0; ui_debug_swipe(dir, ms); }
+                Serial.printf("swipe %s %lu\n", dir > 0 ? "up" : dir < 0 ? "down" : "?", (unsigned long)ms);
+            }
+            else if (strcmp(cmd_buf, "stats") == 0) print_stats();
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -240,13 +295,19 @@ void setup() {
 
     buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
     buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
+    if (!buf1 || !buf2) Serial.println("LVGL: draw buffer alloc FAILED");
 
     lv_display_t* disp = lv_display_create(W, H);
-    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
+    // Render straight into the byte order the panel bus wants (see BoardCaps).
+    lv_display_set_color_format(disp, board_caps().be_pixels ? LV_COLOR_FORMAT_RGB565_SWAPPED
+                                                             : LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp, my_flush_cb);
+    lv_display_set_flush_wait_cb(disp, my_flush_wait_cb);
     lv_display_set_buffers(disp, buf1, buf2, W * BUF_LINES * 2,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+    lv_display_add_event_cb(disp, refr_start_cb, LV_EVENT_REFR_START, NULL);
+    lv_display_add_event_cb(disp, refr_ready_cb, LV_EVENT_REFR_READY, NULL);
 
     lv_indev_t* indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);

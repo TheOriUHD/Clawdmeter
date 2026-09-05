@@ -34,7 +34,8 @@ struct Layout {
     int16_t scr_w, scr_h;
     int16_t margin;
     int16_t title_y;
-    int16_t content_y;
+    int16_t content_y;               // top of the body viewport (below the header)
+    int16_t body_h;                  // scr_h - content_y: the part of the screen that slides
     int16_t content_w;
 
     // Usage screen
@@ -270,6 +271,7 @@ static void compute_layout(const BoardCaps& c) {
     }
 
     L.content_w = L.scr_w - 2 * L.margin;
+    L.body_h = L.scr_h - L.content_y;
 }
 
 // Anthropic brand palette — design tokens live in theme.h
@@ -286,9 +288,18 @@ static void compute_layout(const BoardCaps& c) {
 #define COL_PRESSED   THEME_PANEL_PRESSED
 #define COL_DOT_OFF   THEME_DOT_OFF
 
+// ---- Header + body viewport ----
+// The header (title, corner mascot, battery glyph) is static, screen-level
+// chrome. Everything that navigates lives inside `body`, a clipping viewport
+// from content_y down: the Usage and Settings surfaces are its children and
+// slide vertically inside it, so a transition repaints only the body rows and
+// nothing ever slides through the header.
+static lv_obj_t* body = nullptr;
+static lv_obj_t* lbl_title;                    // shared: clock/"Usage" or "Settings"
+static screen_t  title_screen = SCREEN_USAGE;  // whose title the header currently shows
+
 // ---- Usage screen widgets ----
 static lv_obj_t* usage_container;
-static lv_obj_t* lbl_title;
 // Clock fed by the daemon: base epoch (local wall-clock seconds) + the lv_tick at
 // which it landed, so the title ticks forward locally between 60s payloads.
 // Whether it is SHOWN is the device's own Clock setting (settings.h).
@@ -423,7 +434,6 @@ static lv_obj_t*  drag_in = nullptr;       // surface arriving (NULL = nothing t
 static int        drag_target_page = -1;   // H: page index of drag_in
 static bool       drag_commit = false;
 static bool       drag_tracking = false;   // finger is down; poll its position each tick
-static bool       header_suppressed = false; // mascot + battery hidden while screens slide vertically
 static lv_indev_t* s_indev = nullptr;
 #define DRAG_START_PX   14                 // finger travel before a press becomes a drag
 #define DRAG_COMMIT_DIV 4                  // commit past span/4 …
@@ -537,6 +547,7 @@ static void show_settings_page(int page);
 static void update_page_dots(void);
 static void refresh_about(void);
 static void apply_header_visibility(void);
+static void render_title(bool force);
 
 static bool click_guarded(void) {
     return transitioning || (lv_tick_get() - last_gesture_ms) < GESTURE_CLICK_GUARD_MS;
@@ -569,20 +580,21 @@ static void settle_slides(void) {
     transitioning = false;
     drag_out = drag_in = nullptr;
     drag_mode = DRAG_IGNORE;      // until the next press
-    header_suppressed = false;
+    if (lbl_title) lv_obj_set_style_text_opa(lbl_title, LV_OPA_COVER, 0);
 }
 
-// Park the two screens for `active`: the active one at the origin, the other a
-// full height away (Usage above Settings). Both stay visible.
+// Park the two surfaces inside the body viewport for `active`: the active one
+// at the origin, the other one body-height away (Usage above Settings). Both
+// stay visible; the viewport clips the parked one.
 static void park_screens(screen_t active) {
     lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
     if (settings_container) lv_obj_clear_flag(settings_container, LV_OBJ_FLAG_HIDDEN);
     if (active == SCREEN_SETTINGS) {
-        lv_obj_set_pos(usage_container, 0, -L.scr_h);
+        lv_obj_set_pos(usage_container, 0, -L.body_h);
         if (settings_container) lv_obj_set_pos(settings_container, 0, 0);
     } else {
         lv_obj_set_pos(usage_container, 0, 0);
-        if (settings_container) lv_obj_set_pos(settings_container, 0, L.scr_h);
+        if (settings_container) lv_obj_set_pos(settings_container, 0, L.body_h);
     }
 }
 
@@ -663,11 +675,11 @@ static lv_obj_t* make_dot(lv_obj_t* parent) {
     return d;
 }
 
-// Full-screen transparent group (a page or a screen root).
-static lv_obj_t* make_group(lv_obj_t* parent) {
+// Transparent, non-scrolling group of the given size at (x, y).
+static lv_obj_t* make_group_sized(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* g = lv_obj_create(parent);
-    lv_obj_set_size(g, L.scr_w, L.scr_h);
-    lv_obj_set_pos(g, 0, 0);
+    lv_obj_set_size(g, w, h);
+    lv_obj_set_pos(g, x, y);
     lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(g, 0, 0);
     lv_obj_set_style_pad_all(g, 0, 0);
@@ -675,17 +687,9 @@ static lv_obj_t* make_group(lv_obj_t* parent) {
     return g;
 }
 
-// Full-screen page root with the shared header title. Pages other than Usage
-// get their own so the header stays identical across pages while the corner
-// mascot + battery glyph (screen-level objects) persist.
-static lv_obj_t* make_page(lv_obj_t* scr, const char* title) {
-    lv_obj_t* page = make_group(scr);
-    lv_obj_t* t = lv_label_create(page);
-    lv_label_set_text(t, title);
-    lv_obj_set_style_text_font(t, L.title_font, 0);
-    lv_obj_set_style_text_color(t, COL_TEXT, 0);
-    lv_obj_align(t, LV_ALIGN_TOP_MID, L.title_nudge, L.title_y);
-    return page;
+// A surface or page inside the body viewport: body-sized, at its origin.
+static lv_obj_t* make_body_group(lv_obj_t* parent) {
+    return make_group_sized(parent, 0, 0, L.scr_w, L.body_h);
 }
 
 static void init_battery_icons(void) {
@@ -789,8 +793,8 @@ static void weekly_click_cb(lv_event_t* e) {
 // user knows how to (re)pair. Wording matches the 3-second release gesture.
 static void build_pair_group(lv_obj_t* parent) {
     pair_group = lv_obj_create(parent);
-    lv_obj_set_size(pair_group, L.scr_w, L.scr_h - L.content_y);
-    lv_obj_set_pos(pair_group, 0, L.content_y);
+    lv_obj_set_size(pair_group, L.scr_w, L.body_h);
+    lv_obj_set_pos(pair_group, 0, 0);
     lv_obj_set_style_bg_opa(pair_group, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(pair_group, 0, 0);
     lv_obj_set_style_pad_all(pair_group, 0, 0);
@@ -823,8 +827,8 @@ static void build_pair_group(lv_obj_t* parent) {
 // the pairing hint, so we never render hours-old numbers as if they were live.
 static void build_idle_group(lv_obj_t* parent) {
     idle_group = lv_obj_create(parent);
-    lv_obj_set_size(idle_group, L.scr_w, L.scr_h - L.content_y);
-    lv_obj_set_pos(idle_group, 0, L.content_y);
+    lv_obj_set_size(idle_group, L.scr_w, L.body_h);
+    lv_obj_set_pos(idle_group, 0, 0);
     lv_obj_set_style_bg_opa(idle_group, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(idle_group, 0, 0);
     lv_obj_set_style_pad_all(idle_group, 0, 0);
@@ -840,24 +844,16 @@ static void build_idle_group(lv_obj_t* parent) {
     lv_obj_add_flag(idle_group, LV_OBJ_FLAG_HIDDEN);  // update_view_state decides
 }
 
-static void init_usage_screen(lv_obj_t* scr) {
-    usage_container = make_group(scr);
+static void init_usage_screen(void) {
+    usage_container = make_body_group(body);
     lv_obj_add_event_cb(usage_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
-    lbl_title = lv_label_create(usage_container);
-    lv_label_set_text(lbl_title, "Usage");
-    lv_obj_set_style_text_font(lbl_title, L.title_font, 0);
-    lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
-    // The nudge balances the corner logo on the left; smaller on small
-    // screens where the logo is 40px and the battery icon sits closer.
-    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, L.title_nudge, L.title_y);
-
-    // Usage panels (shown when connected) live in a transparent full-size group
+    // Usage panels (shown when connected) live in a transparent body-size group
     // so they can be toggled against the pairing hint as one unit.
-    usage_group = make_group(usage_container);
+    usage_group = make_body_group(usage_container);
     lv_obj_add_flag(usage_group, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-    panel_session = make_usage_panel(usage_group, L.content_y, "Current",
+    panel_session = make_usage_panel(usage_group, 0, "Current",
                      &lbl_session_pct, &lbl_session_label,
                      &bar_session, &lbl_session_reset);
 
@@ -882,7 +878,7 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_add_flag(lbl_spending_status, LV_OBJ_FLAG_HIDDEN);
 
     panel_weekly = make_usage_panel(usage_group,
-                     L.content_y + L.usage_panel_h + L.usage_panel_gap, "Weekly",
+                     L.usage_panel_h + L.usage_panel_gap, "Weekly",
                      &lbl_weekly_pct, &lbl_weekly_label,
                      &bar_weekly, &lbl_weekly_reset);
     // Recolor enabled so enterprise period box can color pace and reset separately
@@ -1131,7 +1127,7 @@ static void render_pairing_button(void) {
 
 static void build_about_page(lv_obj_t* page) {
     const int rows_h = ABOUT_COUNT * L.about_row_h;
-    lv_obj_t* panel = make_panel(page, L.margin, L.content_y, L.content_w,
+    lv_obj_t* panel = make_panel(page, L.margin, 0, L.content_w,
                                  rows_h + 2 * L.panel_pad_y);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_CLICKABLE);
@@ -1156,17 +1152,19 @@ static void build_about_page(lv_obj_t* page) {
     lv_obj_align(credit, LV_ALIGN_BOTTOM_MID, 0, L.about_hint_y);
 }
 
-static void build_settings_screen(lv_obj_t* scr) {
-    settings_container = make_page(scr, "Settings");
-    for (int pg = 0; pg < SET_PAGES; pg++) settings_pages[pg] = make_group(settings_container);
+static void build_settings_screen(void) {
+    settings_container = make_body_group(body);
+    for (int pg = 0; pg < SET_PAGES; pg++) settings_pages[pg] = make_body_group(settings_container);
 
     const int half_w = (L.content_w - L.tile_gap) / 2;
     const int inner_w = L.content_w - 2 * L.tile_pad_x;
+    const int top = 0;                                 // body-relative
+    const int bottom = L.tiles_bottom - L.content_y;
 
     // ---- Page 0: Clock picker (wide) + Battery icon / Mascot toggles ----
     {
         lv_obj_t* pg = settings_pages[0];
-        lv_obj_t* tile = make_tile(pg, L.margin, L.content_y, L.content_w, L.wide_tile_h, false);
+        lv_obj_t* tile = make_tile(pg, L.margin, top, L.content_w, L.wide_tile_h, false);
         tile_label(tile, "Clock");
         clock_preview = tile_value_label(tile);
 
@@ -1198,8 +1196,8 @@ static void build_settings_screen(lv_obj_t* scr) {
         }
         lv_obj_set_pos(seg_highlight, seg_x[0], seg_y);
 
-        const int row_y = L.content_y + L.wide_tile_h + L.tile_gap;
-        const int row_h = L.tiles_bottom - row_y;
+        const int row_y = top + L.wide_tile_h + L.tile_gap;
+        const int row_h = bottom - row_y;
         lv_obj_t* t1 = make_tile(pg, L.margin, row_y, half_w, row_h, true);
         tile_label(t1, "Battery icon");
         tg_battery = make_toggle(t1);
@@ -1216,14 +1214,14 @@ static void build_settings_screen(lv_obj_t* scr) {
         lv_obj_t* pg = settings_pages[1];
         const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
 
-        lv_obj_t* tb = make_tile(pg, L.margin, L.content_y, L.content_w, L.slider_tile_h, false);
+        lv_obj_t* tb = make_tile(pg, L.margin, top, L.content_w, L.slider_tile_h, false);
         tile_label(tb, "Brightness");
         lbl_brightness = tile_value_label(tb);
         sl_brightness = make_slider(tb, slider_y, inner_w, 5, 100);
         lv_obj_add_event_cb(sl_brightness, brightness_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(sl_brightness, brightness_slider_cb, LV_EVENT_RELEASED, NULL);
 
-        const int ts_y = L.content_y + L.slider_tile_h + L.tile_gap;
+        const int ts_y = top + L.slider_tile_h + L.tile_gap;
         lv_obj_t* ts = make_tile(pg, L.margin, ts_y, L.content_w, L.slider_tile_h, false);
         tile_label(ts, "Sleep after");
         lbl_sleep = tile_value_label(ts);
@@ -1232,7 +1230,7 @@ static void build_settings_screen(lv_obj_t* scr) {
         lv_obj_add_event_cb(sl_sleep, sleep_slider_cb, LV_EVENT_RELEASED, NULL);
 
         const int row_y = ts_y + L.slider_tile_h + L.tile_gap;
-        const int row_h = L.tiles_bottom - row_y;
+        const int row_h = bottom - row_y;
         lv_obj_t* t3 = make_tile(pg, L.margin, row_y, half_w, row_h, true);
         tile_label(t3, "Status line");
         tg_status = make_toggle(t3);
@@ -1252,7 +1250,8 @@ static void build_settings_screen(lv_obj_t* scr) {
     const int total_w = SET_PAGES * L.dot_size + (SET_PAGES - 1) * L.dot_gap;
     for (int pg = 0; pg < SET_PAGES; pg++) {
         page_dots[pg] = make_dot(settings_container);
-        lv_obj_set_pos(page_dots[pg], (L.scr_w - total_w) / 2 + pg * (L.dot_size + L.dot_gap), L.dots_y);
+        lv_obj_set_pos(page_dots[pg], (L.scr_w - total_w) / 2 + pg * (L.dot_size + L.dot_gap),
+                       L.dots_y - L.content_y);
     }
 
     show_settings_page(0);
@@ -1348,8 +1347,20 @@ void ui_init(void) {
 #endif
     init_battery_icons();
 
-    init_usage_screen(scr);
-    build_settings_screen(scr);
+    // Body viewport (clips the sliding surfaces), then the surfaces, then the
+    // shared header title above them.
+    body = make_group_sized(scr, 0, L.content_y, L.scr_w, L.body_h);
+    init_usage_screen();
+    build_settings_screen();
+
+    lbl_title = lv_label_create(scr);
+    lv_label_set_text(lbl_title, "Usage");
+    lv_obj_set_style_text_font(lbl_title, L.title_font, 0);
+    lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
+    // The nudge balances the corner logo on the left; smaller on small
+    // screens where the logo is 40px and the battery icon sits closer.
+    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, L.title_nudge, L.title_y);
+
     splash_init(scr);
 
     if (splash_get_root()) {
@@ -1504,14 +1515,25 @@ static void update_view_state(void) {
                       LV_OBJ_FLAG_HIDDEN);
 }
 
-// The title shows the time only when the daemon supplied it AND the device's
-// Clock setting is on; the format is the device's choice, or the host's when
-// set to Auto.
-static void tick_title_clock(uint32_t now) {
+// The shared header title. On Settings it reads "Settings"; on Usage it shows
+// the time — only when the daemon supplied it AND the device's Clock setting
+// is on (format: the device's choice, or the host's when set to Auto) — else
+// "Usage". `force` re-renders after the title switched screens.
+static void render_title(bool force) {
+    if (!lbl_title) return;
+    if (title_screen == SCREEN_SETTINGS) {
+        if (force) {
+            lv_label_set_text(lbl_title, "Settings");
+            title_is_clock = false;
+            clock_last_min = -1;
+        }
+        return;
+    }
+    const uint32_t now = lv_tick_get();
     const uint8_t mode = settings_get().clock;
     const bool wanted = (mode != CLOCK_OFF) && clock_base_epoch > 0;
     if (!wanted) {
-        if (title_is_clock) {
+        if (title_is_clock || force) {
             lv_label_set_text(lbl_title, "Usage");
             title_is_clock = false;
             clock_last_min = -1;
@@ -1522,7 +1544,7 @@ static void tick_title_clock(uint32_t now) {
     time_t cur = (time_t)(clock_base_epoch + (now - clock_base_ms) / 1000);
     struct tm tmv;
     gmtime_r(&cur, &tmv);   // epoch is already local wall-clock → gmtime keeps it as-is
-    if (tmv.tm_min == clock_last_min && title_is_clock) return;   // only rewrite when the minute changes
+    if (tmv.tm_min == clock_last_min && title_is_clock && !force) return;   // only rewrite when the minute changes
     clock_last_min = tmv.tm_min;
     title_is_clock = true;
     char tbuf[12];
@@ -1569,7 +1591,7 @@ void ui_tick_anim(void) {
     }
     if (current_screen == SCREEN_SPLASH) return;
 
-    tick_title_clock(now);
+    render_title(false);
 
     // Weekly card: advance the face on its own clock (a tap resets the clock
     // with a longer hold, see weekly_click_cb). Only while actually on show.
@@ -1614,7 +1636,11 @@ static screen_t prev_non_splash_screen = SCREEN_USAGE;
 // user's settings on every non-splash page; the splash hides all of them.
 static void apply_header_visibility(void) {
     const Settings& s = settings_get();
-    const bool on_splash = (current_screen == SCREEN_SPLASH) || header_suppressed;
+    const bool on_splash = (current_screen == SCREEN_SPLASH);
+    if (lbl_title) {
+        if (on_splash) lv_obj_add_flag(lbl_title, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(lbl_title, LV_OBJ_FLAG_HIDDEN);
+    }
     if (battery_img) {
         if (on_splash || !s.show_battery) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
         else                              lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
@@ -1657,6 +1683,17 @@ static void set_drag_offset(int32_t off) {
     if (drag_vertical) {
         lv_obj_set_y(drag_out, off);
         if (drag_in) lv_obj_set_y(drag_in, in_off);
+        // The header stays; its title cross-fades: out to 0 at half way, then
+        // the arriving screen's title fades back in.
+        if (drag_in && drag_span > 0) {
+            const int32_t p255 = (LV_ABS(off) * 255) / drag_span;          // 0..255 progress
+            const int32_t opa = LV_ABS(255 - 2 * p255);                       // V shape
+            const screen_t want = (p255 >= 128)
+                ? (drag_in == settings_container ? SCREEN_SETTINGS : SCREEN_USAGE)
+                : (drag_out == settings_container ? SCREEN_SETTINGS : SCREEN_USAGE);
+            if (want != title_screen) { title_screen = want; render_title(true); }
+            lv_obj_set_style_text_opa(lbl_title, (lv_opa_t)(opa > 255 ? 255 : opa), 0);
+        }
     } else {
         lv_obj_set_x(drag_out, off);
         if (drag_in) lv_obj_set_x(drag_in, in_off);
@@ -1688,20 +1725,22 @@ static void drag_anim_done(lv_anim_t* a) {
     }
     drag_out = drag_in = nullptr;
     transitioning = false;
-    if (header_suppressed) {
-        header_suppressed = false;
-        apply_header_visibility();
-    }
+    // Title settles on the screen that is now on show, fully opaque.
+    title_screen = current_screen;
+    lv_obj_set_style_text_opa(lbl_title, LV_OPA_COVER, 0);
+    render_title(true);
 }
 
 // Animate from the current displacement to the snap point — one animation for
-// both surfaces. Duration scales with the distance left to travel.
-static void snap_drag(bool commit) {
+// both surfaces. Duration scales with the distance left to travel (or is
+// forced, for the serial QA command).
+static void snap_drag_ms(bool commit, uint32_t force_ms) {
     drag_commit = commit && drag_in != nullptr;
     const int32_t target = drag_commit ? -drag_sign * drag_span : 0;
     const int32_t remaining = LV_ABS(target - drag_off);
     uint32_t ms = drag_span > 0 ? (uint32_t)((int64_t)SNAP_MS * remaining / drag_span) : 0;
     if (ms < 80) ms = 80;
+    if (force_ms) ms = force_ms;
     transitioning = true;
     lv_anim_t a;
     lv_anim_init(&a);
@@ -1713,6 +1752,7 @@ static void snap_drag(bool commit) {
     lv_anim_set_completed_cb(&a, drag_anim_done);
     lv_anim_start(&a);
 }
+static void snap_drag(bool commit) { snap_drag_ms(commit, 0); }
 
 // First movement past DRAG_START_PX: decide the axis and which surfaces move.
 static void begin_drag(int32_t dx, int32_t dy) {
@@ -1738,10 +1778,8 @@ static void begin_drag(int32_t dx, int32_t dy) {
     } else {
         drag_mode = DRAG_V;
         drag_vertical = true;
-        drag_span = L.scr_h;
+        drag_span = L.body_h;
         drag_sign = dy < 0 ? +1 : -1;          // finger up → Settings rises from below
-        header_suppressed = true;              // chrome steps aside while screens move
-        apply_header_visibility();
         if (current_screen == SCREEN_USAGE) {
             drag_out = usage_container;
             if (drag_sign > 0) {                    // Settings is parked below, ready
@@ -1866,6 +1904,10 @@ void ui_show_screen(screen_t screen) {
 
     if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
     current_screen = screen;
+    if (screen != SCREEN_SPLASH) {
+        title_screen = screen;
+        render_title(true);
+    }
     apply_header_visibility();
 }
 
@@ -1893,6 +1935,17 @@ void ui_show_settings_page(int page) {
     if (page >= SET_PAGES) page = SET_PAGES - 1;
     settings_page = page;
     ui_show_screen(SCREEN_SETTINGS);
+}
+
+void ui_debug_swipe(int dir, uint32_t ms) {
+    if (transitioning || current_screen == SCREEN_SPLASH || dir == 0) return;
+    drag_tracking = false;
+    drag_mode = DRAG_NONE;
+    begin_drag(0, dir > 0 ? -DRAG_START_PX : DRAG_START_PX);   // finger up → Settings
+    const bool ok = (drag_mode == DRAG_V && drag_in != nullptr);
+    drag_mode = DRAG_NONE;
+    if (!ok) { drag_out = drag_in = nullptr; return; }
+    snap_drag_ms(true, ms);
 }
 
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {

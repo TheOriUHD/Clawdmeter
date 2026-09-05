@@ -9,6 +9,7 @@
 #include <string.h>
 
 unsigned long millis(void);
+unsigned long micros(void);
 void delay(unsigned long ms);
 
 class SimSerial {
