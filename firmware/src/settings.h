@@ -44,6 +44,14 @@ enum AlertChime : uint8_t {
     CHIME_MODE_COUNT,
 };
 
+// Companion: how long the Working page stays after Claude finishes before it
+// slides home by itself (only after the device moved there on its own).
+enum HomeDelay : uint8_t {
+    HOME_15S = 0, HOME_30S, HOME_1M, HOME_2M, HOME_5M,
+    HOME_STAY,         // never slide back by itself
+    HOME_MODE_COUNT,
+};
+
 struct Settings {
     uint8_t clock;          // ClockMode
     bool    show_battery;   // battery glyph in the header (boards with a PMU)
@@ -55,6 +63,8 @@ struct Settings {
     bool    auto_switch;    // slide to the Working page when Claude starts working
     bool    alert_glow;     // breathe the orange border when Claude needs you
     uint8_t alert_chime;    // AlertChime
+    uint8_t volume;         // 0..100, every clip (chimes + reset bell)
+    uint8_t home_delay;     // HomeDelay
 };
 
 void            settings_init(void);   // load from NVS, apply the sleep timeout
@@ -70,6 +80,8 @@ void settings_set_face_default(uint8_t face);
 void settings_set_auto_switch(bool v);
 void settings_set_alert_glow(bool v);
 void settings_set_alert_chime(uint8_t mode);
+void settings_set_volume(uint8_t pct);
+void settings_set_home_delay(uint8_t mode);
 
 uint32_t    settings_sleep_timeout_ms(void);   // 0 = never sleep
 uint32_t    settings_face_flip_ms(void);       // 0 = no automatic flipping
@@ -77,3 +89,5 @@ const char* settings_clock_label(uint8_t mode);
 const char* settings_sleep_label(uint8_t mode);
 const char* settings_face_flip_label(uint8_t mode);
 const char* settings_alert_chime_label(uint8_t mode);
+uint32_t    settings_home_delay_ms(void);          // 0 = stay
+const char* settings_home_delay_label(uint8_t mode);

@@ -205,7 +205,7 @@ static void compute_layout(const BoardCaps& c) {
         L.work_sub_y = 270;
         L.work_font = &font_styrene_28;
         L.work_sub_font = &font_styrene_20;
-        L.glow_w = 14;
+        L.glow_w = 15;                   // five 3 px rings
         L.level_dots_y = 2 * L.usage_panel_h + L.usage_panel_gap + 6;
         L.tr_chart_top = 54;
         L.tr_chart_h = 68;
@@ -253,7 +253,7 @@ static void compute_layout(const BoardCaps& c) {
         L.work_sub_y = 240;
         L.work_font = &font_styrene_24;
         L.work_sub_font = &font_styrene_16;
-        L.glow_w = 12;
+        L.glow_w = 10;                   // five 2 px rings
         L.level_dots_y = 2 * L.usage_panel_h + L.usage_panel_gap + 5;
         L.tr_chart_top = 46;
         L.tr_chart_h = 58;
@@ -335,7 +335,7 @@ static void compute_layout(const BoardCaps& c) {
         L.work_sub_y = 118;
         L.work_font = &font_styrene_16;
         L.work_sub_font = &font_styrene_12;
-        L.glow_w = 7;
+        L.glow_w = 5;                    // five 1 px rings
         L.level_dots_y = 2 * L.usage_panel_h + L.usage_panel_gap + 3;
         L.tr_chart_top = 26;
         L.tr_chart_h = 30;
@@ -439,11 +439,19 @@ static const char* const WORK_ACTS[] = { "laptop", "waving", "pointing", "jumpin
 static const char* const ALERT_ACTS[] = { "jumping happy", "waving", "pointing" };
 static uint8_t   alert_act_idx = 0;
 
-// ---- Alert glow (four gradient strips around the screen edge) ----
-static lv_obj_t* glow[4] = { nullptr, nullptr, nullptr, nullptr };
-static lv_grad_dsc_t glow_grad[4];
+// ---- Alert glow ----
+// One full-screen transparent object that paints GLOW_RINGS nested rounded
+// borders in LV_EVENT_DRAW_MAIN, each one band wide and dimmer than the last,
+// with the panel's real corner radius (BoardCaps.corner_radius) — so the glow
+// follows the glass instead of being cut off by the bezel. The breathing anim
+// invalidates only the edge bands and corner squares, never the whole screen.
+#define GLOW_RINGS 5
+static const uint8_t GLOW_RING_OPA[GLOW_RINGS] = { 255, 170, 105, 55, 20 };
+static lv_obj_t* glow_obj = nullptr;
 static bool      alert_active = false;
 static int32_t   glow_level = 0;                 // animated 0..255
+static int       glow_radius = 0;                // corner radius in use (caps, or "radius N" over serial)
+static lv_obj_t* corner_test = nullptr;          // calibration overlay (serial "corners on")
 
 // ---- Trend page ----
 static lv_obj_t* page_trend = nullptr;
@@ -489,16 +497,17 @@ static lv_obj_t* face_dots[MAX_SCOPED_WEEKLY + 1];
 //           Status line (toggle) · Pairing (button, two taps)
 //   Page 2  Weekly card: Default face (picker built from the live limits) ·
 //           Flip every (stepped slider, Off … 30 s)
-//   Page 3  Companion: Chime picker (Off / Needs you / All) + Preview ·
-//           Auto-switch / Glow toggles
-//   Page 4  About (device info)
+//   Page 3  Alerts: Chime picker (Off / Needs you / All) + Preview · Volume slider
+//   Page 4  Companion: Auto-switch / Glow toggles · Back home after (stepped slider)
+//   Page 5  About (device info)
 // Pages slide horizontally on swipe; the terra-cotta accent is the one
 // "active" colour across every control so they read as a family.
 static lv_obj_t* settings_container = nullptr;
-#define SET_PAGES 5
+#define SET_PAGES 6
 #define PAGE_FACE  2
-#define PAGE_COMPANION 3
-#define PAGE_ABOUT 4
+#define PAGE_ALERTS 3
+#define PAGE_COMPANION 4
+#define PAGE_ABOUT 5
 static lv_obj_t* settings_pages[SET_PAGES];
 static lv_obj_t* page_dots[SET_PAGES];
 static int       settings_page = 0;
@@ -518,6 +527,10 @@ static lv_obj_t* chime_hl = nullptr;
 static lv_obj_t* chime_labels[CHIME_MODE_COUNT];
 static int16_t   chime_x[CHIME_MODE_COUNT];
 static lv_obj_t* preview_button = nullptr;
+static lv_obj_t* sl_volume = nullptr;
+static lv_obj_t* lbl_volume = nullptr;
+static lv_obj_t* sl_home = nullptr;
+static lv_obj_t* lbl_home = nullptr;
 
 // Sliders
 static lv_obj_t* sl_brightness = nullptr;
@@ -1815,10 +1828,34 @@ static void set_chime_segment(int mode, bool animate) {
         lv_obj_set_style_text_color(chime_labels[i], i == mode ? COL_TEXT : COL_DIM, 0);
 }
 
-static void build_companion_page(lv_obj_t* page) {
+// Volume: the codec follows the finger (so you hear it as you slide), the
+// value persists on release and the needs-you chime auditions the new level.
+static void volume_slider_cb(lv_event_t* e) {
+    const lv_event_code_t code = lv_event_get_code(e);
+    const int v = (int)lv_slider_get_value(sl_volume);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_label_set_text_fmt(lbl_volume, "%d%%", v);
+        sound_hal_set_volume(v);
+    } else if (code == LV_EVENT_RELEASED) {
+        settings_set_volume((uint8_t)v);
+        sound_hal_set_volume(v);
+        sound_hal_play_alert(0);
+    }
+}
+
+static void home_slider_cb(lv_event_t* e) {
+    const lv_event_code_t code = lv_event_get_code(e);
+    const int idx = (int)lv_slider_get_value(sl_home);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_label_set_text(lbl_home, settings_home_delay_label((uint8_t)idx));
+        lv_obj_set_style_text_color(lbl_home, idx == HOME_STAY ? COL_DIM : COL_TEXT, 0);
+    } else if (code == LV_EVENT_RELEASED) {
+        settings_set_home_delay((uint8_t)idx);
+    }
+}
+
+static void build_alerts_page(lv_obj_t* page) {
     const int inner_w = L.content_w - 2 * L.tile_pad_x;
-    const int half_w = (L.content_w - L.tile_gap) / 2;
-    const int bottom = L.tiles_bottom - L.content_y;
 
     lv_obj_t* tile = make_tile(page, L.margin, 0, L.content_w, L.wide_tile_h, false);
     tile_label(tile, "Chime");
@@ -1855,17 +1892,36 @@ static void build_companion_page(lv_obj_t* page) {
     }
     lv_obj_set_pos(chime_hl, chime_x[0], seg_y);
 
-    const int row_y = L.wide_tile_h + L.tile_gap;
-    const int row_h = bottom - row_y;
-    lv_obj_t* t1 = make_tile(page, L.margin, row_y, half_w, row_h, true);
+    const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
+    lv_obj_t* tv = make_tile(page, L.margin, L.wide_tile_h + L.tile_gap, L.content_w, L.slider_tile_h, false);
+    tile_label(tv, "Volume");
+    lbl_volume = tile_value_label(tv);
+    sl_volume = make_slider(tv, slider_y, inner_w, 0, 100);
+    lv_obj_add_event_cb(sl_volume, volume_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(sl_volume, volume_slider_cb, LV_EVENT_RELEASED, NULL);
+}
+
+static void build_companion_page(lv_obj_t* page) {
+    const int inner_w = L.content_w - 2 * L.tile_pad_x;
+    const int half_w = (L.content_w - L.tile_gap) / 2;
+
+    lv_obj_t* t1 = make_tile(page, L.margin, 0, half_w, L.wide_tile_h, true);
     tile_label(t1, "Auto-switch");
     tg_autosw = make_toggle(t1);
     lv_obj_add_event_cb(t1, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_AUTOSW);
 
-    lv_obj_t* t2 = make_tile(page, L.margin + half_w + L.tile_gap, row_y, half_w, row_h, true);
+    lv_obj_t* t2 = make_tile(page, L.margin + half_w + L.tile_gap, 0, half_w, L.wide_tile_h, true);
     tile_label(t2, "Glow");
     tg_glow = make_toggle(t2);
     lv_obj_add_event_cb(t2, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_GLOW);
+
+    const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
+    lv_obj_t* th = make_tile(page, L.margin, L.wide_tile_h + L.tile_gap, L.content_w, L.slider_tile_h, false);
+    tile_label(th, "Back home after");
+    lbl_home = tile_value_label(th);
+    sl_home = make_slider(th, slider_y, inner_w, 0, HOME_MODE_COUNT - 1);
+    lv_obj_add_event_cb(sl_home, home_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(sl_home, home_slider_cb, LV_EVENT_RELEASED, NULL);
 }
 
 static void build_about_page(lv_obj_t* page) {
@@ -1989,10 +2045,13 @@ static void build_settings_screen(void) {
     // ---- Page 2: Weekly card (default face + flip interval) ----
     build_face_page(settings_pages[PAGE_FACE]);
 
-    // ---- Page 3: Companion (chime, auto-switch, glow) ----
+    // ---- Page 3: Alerts (chime picker + Preview, volume) ----
+    build_alerts_page(settings_pages[PAGE_ALERTS]);
+
+    // ---- Page 4: Companion (auto-switch, glow, back home after) ----
     build_companion_page(settings_pages[PAGE_COMPANION]);
 
-    // ---- Page 4: About ----
+    // ---- Page 5: About ----
     build_about_page(settings_pages[PAGE_ABOUT]);
 
     // Page indicator dots, centred under the tile area.
@@ -2039,6 +2098,15 @@ static void refresh_settings_controls(bool animate) {
     set_toggle(tg_autosw, s.auto_switch, "On", "Off", animate);
     set_toggle(tg_glow, s.alert_glow, "On", "Off", animate);
     set_chime_segment(s.alert_chime, animate);
+    if (sl_volume) {
+        lv_slider_set_value(sl_volume, s.volume, animate ? LV_ANIM_ON : LV_ANIM_OFF);
+        lv_label_set_text_fmt(lbl_volume, "%d%%", s.volume);
+    }
+    if (sl_home) {
+        lv_slider_set_value(sl_home, s.home_delay, animate ? LV_ANIM_ON : LV_ANIM_OFF);
+        lv_label_set_text(lbl_home, settings_home_delay_label(s.home_delay));
+        lv_obj_set_style_text_color(lbl_home, s.home_delay == HOME_STAY ? COL_DIM : COL_TEXT, 0);
+    }
     lv_slider_set_value(sl_brightness, brightness_get_pct(), animate ? LV_ANIM_ON : LV_ANIM_OFF);
     lv_label_set_text_fmt(lbl_brightness, "%d%%", brightness_get_pct());
     lv_slider_set_value(sl_sleep, s.sleep, animate ? LV_ANIM_ON : LV_ANIM_OFF);
@@ -2088,46 +2156,135 @@ static void refresh_about(void) {
 // Four gradient strips hugging the screen edge, faded in from the outside;
 // one animation breathes their opacity while Claude needs you. Strips (not a
 // full-screen border) so a frame of the breath repaints only the edges.
+static int glow_band(void) {
+    int b = L.glow_w / GLOW_RINGS;
+    return b < 1 ? 1 : b;
+}
+
+// Paint the rings. Runs only for the areas LVGL is redrawing (the invalidated
+// bands + corners), so a breath costs about the edge area, not the screen.
+static void glow_draw_cb(lv_event_t* e) {
+    lv_layer_t* layer = lv_event_get_layer(e);
+    if (!layer) return;
+    const int band = glow_band();
+    for (int i = 0; i < GLOW_RINGS; i++) {
+        lv_draw_border_dsc_t d;
+        lv_draw_border_dsc_init(&d);
+        d.color = COL_ACCENT;
+        d.width = band;
+        d.side = LV_BORDER_SIDE_FULL;
+        d.opa = (lv_opa_t)((glow_level * GLOW_RING_OPA[i]) / 255);
+        const int r = glow_radius - i * band;
+        d.radius = r < 0 ? 0 : r;
+        lv_area_t a = { i * band, i * band, L.scr_w - 1 - i * band, L.scr_h - 1 - i * band };
+        lv_draw_border(layer, &d, &a);
+    }
+}
+
+// Invalidate just what the rings touch: four edge bands plus the corner
+// squares the rounded corners sweep through.
+static void glow_invalidate(void) {
+    if (!glow_obj) return;
+    const int w = L.glow_w;
+    const int c = glow_radius + w;                // corner square side
+    lv_area_t a;
+    a.x1 = 0; a.y1 = 0; a.x2 = L.scr_w - 1; a.y2 = w - 1;                  lv_obj_invalidate_area(glow_obj, &a);
+    a.y1 = L.scr_h - w; a.y2 = L.scr_h - 1;                                   lv_obj_invalidate_area(glow_obj, &a);
+    a.x1 = 0; a.y1 = 0; a.x2 = w - 1; a.y2 = L.scr_h - 1;                  lv_obj_invalidate_area(glow_obj, &a);
+    a.x1 = L.scr_w - w; a.x2 = L.scr_w - 1;                                   lv_obj_invalidate_area(glow_obj, &a);
+    a.x1 = 0; a.y1 = 0; a.x2 = c; a.y2 = c;                                   lv_obj_invalidate_area(glow_obj, &a);
+    a.x1 = L.scr_w - 1 - c; a.x2 = L.scr_w - 1;                               lv_obj_invalidate_area(glow_obj, &a);
+    a.y1 = L.scr_h - 1 - c; a.y2 = L.scr_h - 1;                               lv_obj_invalidate_area(glow_obj, &a);
+    a.x1 = 0; a.x2 = c;                                                       lv_obj_invalidate_area(glow_obj, &a);
+}
+
 static void glow_anim_exec(void* var, int32_t v) {
     (void)var;
     glow_level = v;
-    for (int i = 0; i < 4; i++)
-        if (glow[i]) lv_obj_set_style_bg_opa(glow[i], (lv_opa_t)v, 0);
+    glow_invalidate();
 }
 
 static void build_glow(lv_obj_t* scr) {
-    const lv_color_t col[2] = { COL_ACCENT, COL_ACCENT };
-    const uint8_t fr[2] = { 0, 255 };
-    const lv_opa_t in_out[2] = { LV_OPA_COVER, LV_OPA_TRANSP };
-    const lv_opa_t out_in[2] = { LV_OPA_TRANSP, LV_OPA_COVER };
-    const int w = L.glow_w;
-    for (int i = 0; i < 4; i++) {
-        glow[i] = lv_obj_create(scr);
-        lv_obj_set_style_border_width(glow[i], 0, 0);
-        lv_obj_set_style_radius(glow[i], 0, 0);
-        lv_obj_set_style_pad_all(glow[i], 0, 0);
-        lv_obj_clear_flag(glow[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(glow[i], LV_OBJ_FLAG_SCROLLABLE);
-        const bool horizontal_strip = (i < 2);           // 0 top, 1 bottom, 2 left, 3 right
-        const bool from_edge = (i == 0 || i == 2);       // gradient starts at the outer edge
-        lv_gradient_init_stops(&glow_grad[i], col, from_edge ? in_out : out_in, fr, 2);
-        glow_grad[i].dir = horizontal_strip ? LV_GRAD_DIR_VER : LV_GRAD_DIR_HOR;
-        lv_obj_set_style_bg_grad(glow[i], &glow_grad[i], 0);
-        lv_obj_set_style_bg_opa(glow[i], LV_OPA_TRANSP, 0);
-        if (i == 0)      { lv_obj_set_pos(glow[i], 0, 0);             lv_obj_set_size(glow[i], L.scr_w, w); }
-        else if (i == 1) { lv_obj_set_pos(glow[i], 0, L.scr_h - w);   lv_obj_set_size(glow[i], L.scr_w, w); }
-        else if (i == 2) { lv_obj_set_pos(glow[i], 0, 0);             lv_obj_set_size(glow[i], w, L.scr_h); }
-        else             { lv_obj_set_pos(glow[i], L.scr_w - w, 0);   lv_obj_set_size(glow[i], w, L.scr_h); }
-        lv_obj_add_flag(glow[i], LV_OBJ_FLAG_HIDDEN);
+    glow_radius = board_caps().corner_radius;
+    glow_obj = make_group_sized(scr, 0, 0, L.scr_w, L.scr_h);
+    lv_obj_clear_flag(glow_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(glow_obj, glow_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    lv_obj_add_flag(glow_obj, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ---- Corner calibration overlay ----
+// Six outlines hugging the screen edge at candidate radii, each in its own
+// colour, with a legend in the middle: the one whose corners run along the
+// bezel (neither cut off nor leaving a black gap) is the glass's radius.
+static const int      CORNER_RADII[6]  = { 40, 55, 70, 85, 100, 115 };
+static const uint32_t CORNER_COLORS[6] = { 0xfaf9f5, 0xd97757, 0x788c5d, 0xc0392b, 0x4a90d9, 0xe0c060 };
+static const char* const CORNER_NAMES[6] = { "white", "orange", "green", "red", "blue", "yellow" };
+
+static void corner_draw_cb(lv_event_t* e) {
+    lv_layer_t* layer = lv_event_get_layer(e);
+    if (!layer) return;
+    for (int i = 0; i < 6; i++) {
+        lv_draw_border_dsc_t d;
+        lv_draw_border_dsc_init(&d);
+        d.color = lv_color_hex(CORNER_COLORS[i]);
+        d.width = 2;
+        d.side = LV_BORDER_SIDE_FULL;
+        d.opa = LV_OPA_COVER;
+        d.radius = CORNER_RADII[i];
+        lv_area_t a = { 0, 0, L.scr_w - 1, L.scr_h - 1 };
+        lv_draw_border(layer, &d, &a);
     }
+}
+
+void ui_debug_corners(bool on) {
+    if (on && !corner_test) {
+        corner_test = make_group_sized(lv_screen_active(), 0, 0, L.scr_w, L.scr_h);
+        lv_obj_clear_flag(corner_test, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(corner_test, COL_BG, 0);
+        lv_obj_set_style_bg_opa(corner_test, LV_OPA_COVER, 0);
+        lv_obj_add_event_cb(corner_test, corner_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+        lv_obj_t* legend = lv_label_create(corner_test);
+        char buf[160] = "Corner radius\n";
+        for (int i = 0; i < 6; i++) {
+            char line[32];
+            snprintf(line, sizeof(line), "%s %d\n", CORNER_NAMES[i], CORNER_RADII[i]);
+            strlcat(buf, line, sizeof(buf));
+        }
+        lv_label_set_text(legend, buf);
+        lv_obj_set_style_text_font(legend, L.about_key_font, 0);
+        lv_obj_set_style_text_color(legend, COL_DIM, 0);
+        lv_obj_set_style_text_align(legend, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(legend);
+        for (int i = 0; i < 6; i++) {
+            // Each outline's corner arc ends on the top edge at x = radius:
+            // a tick in the outline's colour marks where to look.
+            lv_obj_t* tick = lv_obj_create(corner_test);
+            lv_obj_set_size(tick, 2, 12);
+            lv_obj_set_pos(tick, CORNER_RADII[i] - 1, 2);
+            lv_obj_set_style_bg_color(tick, lv_color_hex(CORNER_COLORS[i]), 0);
+            lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(tick, 0, 0);
+            lv_obj_set_style_radius(tick, 0, 0);
+            lv_obj_clear_flag(tick, LV_OBJ_FLAG_CLICKABLE);
+        }
+    } else if (!on && corner_test) {
+        lv_obj_delete(corner_test);
+        corner_test = nullptr;
+    }
+}
+
+void ui_debug_glow_radius(int radius) {
+    glow_radius = radius < 0 ? 0 : radius;
+    if (glow_obj && !lv_obj_has_flag(glow_obj, LV_OBJ_FLAG_HIDDEN)) lv_obj_invalidate(glow_obj);
 }
 
 // kind 0 = Claude needs you (permission / question), 1 = a long turn finished.
 static void alert_start(int kind) {
     const Settings& s = settings_get();
     idle_note_activity();                          // wake a dimmed panel
-    if (s.alert_glow) {
-        for (int i = 0; i < 4; i++) if (glow[i]) lv_obj_clear_flag(glow[i], LV_OBJ_FLAG_HIDDEN);
+    if (s.alert_glow && glow_obj) {
+        glow_level = 0;
+        lv_obj_clear_flag(glow_obj, LV_OBJ_FLAG_HIDDEN);
         lv_anim_delete(&glow_level, glow_anim_exec);
         lv_anim_t a;
         lv_anim_init(&a);
@@ -2149,7 +2306,7 @@ static void alert_start(int kind) {
 
 static void alert_stop(void) {
     lv_anim_delete(&glow_level, glow_anim_exec);
-    for (int i = 0; i < 4; i++) if (glow[i]) lv_obj_add_flag(glow[i], LV_OBJ_FLAG_HIDDEN);
+    if (glow_obj) lv_obj_add_flag(glow_obj, LV_OBJ_FLAG_HIDDEN);
     if (!alert_active) return;
     alert_active = false;
     work_actor_state = -1;                          // re-pick the state's animation
@@ -3022,13 +3179,14 @@ void ui_companion_update(const CompanionData* cc) {
         home_due_ms = 0;
     }
     if (auto_arrived) {
-        // Once Claude is quiet the page returns home by itself — quickly when
-        // nothing is running, after a long look when it is your turn.
-        if (st == CC_NONE || st == CC_IDLE || cc_cur.sessions == 0) home_due_ms = now + 8000;
-        else if (st == CC_DONE)      home_due_ms = now + 45000;
-        else if (st == CC_TURN_DONE) home_due_ms = now + 90000;
-        else if (st == CC_ERROR)     home_due_ms = now + 30000;
-        else                         home_due_ms = 0;
+        // Once Claude is quiet the page returns home by itself after the user's
+        // "Back home after" delay (Stay = never); with nothing left to show it
+        // goes sooner.
+        const uint32_t d = settings_home_delay_ms();
+        if (d == 0)                                                       home_due_ms = 0;
+        else if (st == CC_NONE || st == CC_IDLE || cc_cur.sessions == 0) home_due_ms = now + (d < 8000 ? d : 8000);
+        else if (st == CC_DONE || st == CC_TURN_DONE || st == CC_ERROR)  home_due_ms = now + d;
+        else                                                              home_due_ms = 0;
     }
     render_work_page();
 }

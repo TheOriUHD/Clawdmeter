@@ -49,3 +49,9 @@ void ui_show_level_page(int page);
 // Run the full "needs you" alert once — glow, mascot, chime per the settings —
 // without a companion event (Settings → Companion → Preview; serial "alert").
 void ui_preview_alert(void);
+
+// Calibration: outline the screen at several corner radii in distinct colours
+// (serial "corners on|off") so the glass's real radius can be read off the
+// device; "radius N" then moves the alert glow's corner radius live.
+void ui_debug_corners(bool on);
+void ui_debug_glow_radius(int radius);

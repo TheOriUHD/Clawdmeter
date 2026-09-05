@@ -278,6 +278,18 @@ static void check_serial_cmd() {
             // 5 needs-you 6 error 7 compacting 8 turn-done); "trend demo" fakes a
             // week of history.
             else if (strncmp(cmd_buf, "alert", 5) == 0) sound_hal_play_alert(atoi(cmd_buf + 5));
+            // "volume N" sets + saves the loudness; "corners on|off" shows the
+            // corner-radius calibration outlines; "radius N" moves the glow's
+            // corner radius live (0 = square) until the next boot.
+            else if (strncmp(cmd_buf, "volume ", 7) == 0) {
+                const int v = atoi(cmd_buf + 7);
+                settings_set_volume((uint8_t)(v < 0 ? 0 : v > 100 ? 100 : v));
+                sound_hal_set_volume(settings_get().volume);
+                ui_refresh_settings();
+                Serial.printf("volume -> %u%%\n", settings_get().volume);
+            }
+            else if (strncmp(cmd_buf, "corners", 7) == 0) ui_debug_corners(strstr(cmd_buf, "off") == nullptr);
+            else if (strncmp(cmd_buf, "radius ", 7) == 0) { ui_debug_glow_radius(atoi(cmd_buf + 7)); Serial.printf("glow radius -> %d\n", atoi(cmd_buf + 7)); }
             else if (strcmp(cmd_buf, "preview") == 0)   ui_preview_alert();
             else if (strncmp(cmd_buf, "cc ", 3) == 0) {
                 CompanionData fake = {};
@@ -314,6 +326,7 @@ static void check_serial_cmd() {
                 else if (strcmp(p, "settings2") == 0) ui_show_settings_page(1);
                 else if (strcmp(p, "settings3") == 0) ui_show_settings_page(2);
                 else if (strcmp(p, "settings4") == 0) ui_show_settings_page(3);
+                else if (strcmp(p, "settings5") == 0) ui_show_settings_page(4);
                 else if (strcmp(p, "about") == 0)     ui_show_screen(SCREEN_ABOUT);
                 else if (strcmp(p, "working") == 0)   ui_show_level_page(0);
                 else if (strcmp(p, "trend") == 0)     ui_show_level_page(2);
@@ -360,6 +373,7 @@ void setup() {
     power_hal_init();
     imu_hal_init();
     sound_hal_init();
+    sound_hal_set_volume(settings_get().volume);   // the codec is up; push the saved loudness
     touch_hal_init();
 
     // ---- LVGL ----

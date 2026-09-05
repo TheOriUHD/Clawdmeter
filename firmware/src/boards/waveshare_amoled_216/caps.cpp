@@ -9,6 +9,7 @@ static const BoardCaps caps = {
     .has_rotation = true,
     .has_battery = true,
     .has_imu = true,
+    .corner_radius = 70,   // rounded glass: measured on the C6 2.16 with the `corners on` overlay (2026-09-05)
 };
 
 const BoardCaps& board_caps(void) { return caps; }

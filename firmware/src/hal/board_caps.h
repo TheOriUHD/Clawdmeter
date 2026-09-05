@@ -25,6 +25,11 @@ struct BoardCaps {
     // per-pixel swap anywhere on the hot path. Boards leave it false unless
     // their display.cpp is written for it (the C6 2.16 is).
     bool    be_pixels;
+
+    // Radius, in px, of the glass's rounded corners — the active area is a
+    // rounded rectangle on the AMOLEDs and anything drawn hugging the edge
+    // (the alert glow) must follow it or it looks cut off. 0 = square panel.
+    int16_t corner_radius;
 };
 
 const BoardCaps& board_caps(void);
