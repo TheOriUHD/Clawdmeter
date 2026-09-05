@@ -53,7 +53,7 @@ makes the device more functional while keeping its design language intact:
   and the device decides whether to show it.
 - **A battery that means something.** The header battery is drawn by the
   firmware — a wider outline with a proportional fill and the **percentage
-  inside** (red fill at ≤10%, accent while charging). When it's on: a board
+  inside** (red fill at ≤10%, accent while plugged in). When it's on: a board
   with a LiPo shows its own cell; a USB-powered board (the PMU reports no cell)
   shows the *host's* battery instead, which the daemon sends with every payload
   (`pmset -g batt` on macOS, `Win32_Battery` on Windows; `host_battery = off`

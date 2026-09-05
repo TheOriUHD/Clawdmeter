@@ -23,12 +23,14 @@ PMSET_FINISHING = " -InternalBattery-0 (id=1)\t97%; finishing charge; 0:05 remai
 PMSET_DESKTOP = "Now drawing from 'AC Power'\n"
 
 
-def test_parse_pmset_states():
+def test_parse_pmset_states_flag_means_plugged_in():
     assert mac.parse_pmset_batt(PMSET_DISCHARGING) == (85, False)
     assert mac.parse_pmset_batt(PMSET_CHARGING) == (42, True)
-    assert mac.parse_pmset_batt(PMSET_CHARGED) == (100, False)
-    assert mac.parse_pmset_batt(PMSET_AC_NOT_CHARGING) == (80, False)
+    assert mac.parse_pmset_batt(PMSET_CHARGED) == (100, True)            # on AC, full
+    assert mac.parse_pmset_batt(PMSET_AC_NOT_CHARGING) == (80, True)     # on AC, charging paused
     assert mac.parse_pmset_batt(PMSET_FINISHING) == (97, True)
+    # the header line alone is authoritative for the cable
+    assert mac.parse_pmset_batt("Now drawing from 'AC Power'\n -InternalBattery-0\t60%; discharging; present: true") == (60, True)
 
 
 def test_parse_pmset_no_battery_and_garbage():
@@ -68,6 +70,7 @@ def test_host_battery_setting_default_on(tmp_path):
 def test_windows_parse():
     assert win.parse_win32_battery("73 1\n") == (73, False)     # discharging
     assert win.parse_win32_battery("73 2\n") == (73, True)      # on AC
+    assert win.parse_win32_battery("100 3\n") == (100, True)    # fully charged, on AC
     assert win.parse_win32_battery("40 6\n") == (40, True)      # charging
     assert win.parse_win32_battery("") is None
     assert win.parse_win32_battery("x y") is None
