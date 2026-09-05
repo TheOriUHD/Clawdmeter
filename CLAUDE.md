@@ -18,7 +18,7 @@ Seven ports today (two SoC families, five panel sizes):
 
 Plus one non-hardware target: `boards/sim/` — **native desktop simulator** (SDL2 window, 480×480, `platform = native`). Build env: `sim`. See "Desktop simulator" below.
 
-**C6 ports have no PSRAM** — shared code gates on `BOARD_HAS_PSRAM` (absent on C6) to use `MALLOC_CAP_INTERNAL` for LVGL/splash buffers, and the `screenshot` serial command is disabled (`LV_USE_SNAPSHOT=0`), so UI changes on a C6 board must be eyeballed on hardware, not auto-captured.
+**C6 ports have no PSRAM** — shared code gates on `BOARD_HAS_PSRAM` (absent on C6) to use `MALLOC_CAP_INTERNAL` for LVGL/splash buffers, and the `screenshot` serial command is disabled (`LV_USE_SNAPSHOT=0`), so UI changes on a C6 board must be eyeballed on hardware, not auto-captured. The C6 2.16 also has an asynchronous DMA pixel path and renders big-endian (`BoardCaps.be_pixels`) — see "Frame rate on PSRAM-less boards".
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
@@ -187,6 +187,28 @@ magick sim-autoshot.bmp shot.png   # then Read the PNG
 10. **No `#ifdef BOARD_*` in shared code.** The whole point of the refactor — if you're about to add one, you probably want a `BoardCaps` field or a per-board file instead. See `docs/porting/capability-flags.md`.
 11. **LCD-4 RGB bounce buffers.** `Arduino_RGB_Display` DMA-scans PSRAM. Pass `bounce_buffer_size_px = LCD_WIDTH * 10` so ESP-IDF allocates SRAM bounce buffers. Do not call `rgbpanel->getFrameBuffer()` after `gfx->begin()` — it constructs a second RGB panel and crashes.
 12. **LCD-4 has only one user button (GPIO 0 / BOOT).** GPIO 18 is display R3. KEY/PWR is EN/RST (hardware reset). Hold-to-pair and PWR-short animation/brightness cycling are unavailable; tap the panel to toggle splash ↔ usage.
+
+## Frame rate on PSRAM-less boards (C6) — the transition playbook
+
+Measured on the C6 2.16 with the `stats` / `swipe up|down [ms]` serial commands
+(frame = LVGL render + flush; a screen transition repaints the 380-row body):
+
+| step | frame | notes |
+|---|---|---|
+| baseline: 2×20-line strips, `-Os`, blocking `writePixels` | 95 ms (~10 fps) | 24 strips → 24 object-tree walks per frame |
+| one 120-line strip, header static + body viewport | 63 ms | fewer strips + 21% fewer pixels |
+| `-O2` (Arduino core defaults to `-Os`) | 53 ms (flush 31) | render 45 → 22 ms |
+| in-place swap + raw `writeBytes` / 16 KB chunks | 50 ms | flush is wire-bound, not overhead |
+| QSPI 80 MHz (`-DESP32QSPI_FREQUENCY=80000000`) | 39 ms (flush 17) | electrically fine; visual check pending |
+| async DMA flush (2nd SPI device, queued 32 KB transactions) + 2×60-line buffers + LVGL `flush_wait_cb` | 36 ms (flush wait 9) | flush overlaps render |
+| LVGL renders `RGB565_SWAPPED` (`BoardCaps.be_pixels`) + `-O3` | **30 ms (~33 fps)** | no per-pixel swap anywhere |
+
+Rules that fall out of this: never call `lv_display_flush_ready()` in the flush
+callback (LVGL clears the flag after `display_hal_wait()`), keep the C6 SPI
+transactions ≤ 32 KB (hardware limit — the failure mode is a hang in the wait),
+and treat `heap free` in the boot banner as the budget (2×60-line buffers leave
+~108 KB with BLE up). The horizontal page drags and the finger-follow use the
+same path, so they benefit equally.
 
 ## Icons
 

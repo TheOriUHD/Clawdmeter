@@ -281,6 +281,7 @@ static bool            force_full   = false;  // repaint everything on the next 
 static void blit_cells(const uint8_t* cells, const uint16_t* palette,
                        int gx0, int gy0, int gx1, int gy1) {
     if (!strip_buf) return;
+    const bool be = board_caps().be_pixels;
     const int spc = scr_cell;
     const int bw  = (gx1 - gx0 + 1) * spc;          // band width, px
     const int px  = scr_offx + gx0 * spc;
@@ -288,6 +289,7 @@ static void blit_cells(const uint8_t* cells, const uint16_t* palette,
         for (int gx = gx0; gx <= gx1; gx++) {       // expand one source row across
             uint8_t code = cells[gy * GRID + gx];
             uint16_t color = (palette && code < SPLASH_PALETTE_SIZE) ? palette[code] : COL_EMPTY;
+            if (be) color = (uint16_t)((color << 8) | (color >> 8));   // bus byte order (BoardCaps.be_pixels)
             uint16_t* p = &strip_buf[(gx - gx0) * spc];
             for (int i = 0; i < spc; i++) p[i] = color;
         }

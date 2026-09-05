@@ -23,6 +23,14 @@ void display_hal_fill_screen(uint16_t color565);
 void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
                              const uint16_t* pixels);
 
+// Block until any panel transfer started by display_hal_draw_bitmap() has
+// completed. Boards that push pixels synchronously leave the weak default
+// (a no-op, hal/display_hal_defaults.cpp). Boards that hand the strip to DMA
+// and return early implement it — LVGL calls it (flush_wait_cb) right before
+// the next strip is flushed, which is what lets rendering overlap the flush.
+// After it returns the caller may reuse or modify the pixel buffer.
+void display_hal_wait(void);
+
 // Per-loop housekeeping for rotation-aware boards: detects orientation
 // changes from the IMU, blanks the panel, invalidates LVGL, and ramps
 // brightness back up. No-op on boards without rotation.

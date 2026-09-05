@@ -15,6 +15,12 @@ unsigned long millis(void) {
     return (unsigned long)(now_ms() - t0);
 }
 
+unsigned long micros(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long)((uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000ull);
+}
+
 void delay(unsigned long ms) { usleep(ms * 1000); }
 
 size_t SimSerial::write(const uint8_t* buf, size_t len) {

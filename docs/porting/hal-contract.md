@@ -23,9 +23,10 @@ sync with the compile-time `BOARD_HAS_*` flags in `board.h`.
 | `display_hal_begin`         | `gfx->begin()`, clear screen, set default brightness. Allocate any rotation buffers needed by `display_hal_draw_bitmap`. |
 | `display_hal_set_brightness`| Pass-through to the driver. Driver-defined scale (typically 0..255). |
 | `display_hal_fill_screen`   | Used by tests / boot screen — `gfx->fillScreen(color)`. |
-| `display_hal_draw_bitmap`   | Push a w×h RGB565 strip at (x, y). If the panel can't rotate natively, apply CPU rotation here before pushing — `imu_hal_rotation_quadrant()` returns the current orientation. **Must complete inside LVGL's render budget** (a few ms at typical strip sizes). |
+| `display_hal_draw_bitmap`   | Push a w×h RGB565 strip at (x, y). If the panel can't rotate natively, apply CPU rotation here before pushing — `imu_hal_rotation_quadrant()` returns the current orientation. **Must complete inside LVGL's render budget** (a few ms at typical strip sizes) — or return early with the transfer in flight and implement `display_hal_wait`. If `BoardCaps.be_pixels` is true the strip arrives already byte-swapped (big-endian RGB565); the implementation may modify the strip in place — both callers pass their own scratch buffer. |
 | `display_hal_tick`          | Per-loop housekeeping — used by rotation-aware boards to blank the panel + ramp brightness during a rotation transition. No-op on boards without rotation. |
 | `display_hal_round_area`    | LVGL invalidate-area hook. Most QSPI AMOLED drivers expect even-aligned flush regions; apply `& ~1` / `| 1` to coordinates. |
+| `display_hal_wait`          | Optional. Block until a transfer started by `display_hal_draw_bitmap` has completed. The weak default (`hal/display_hal_defaults.cpp`) is a no-op for boards that push pixels synchronously. A board that hands the strip to DMA and returns early defines its own — LVGL calls it (`flush_wait_cb`) right before the next flush, so rendering the next strip overlaps the transfer. Also call it yourself before any other bus command (brightness, fill). |
 
 ## `touch_hal.h`
 

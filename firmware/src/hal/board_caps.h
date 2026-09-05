@@ -18,6 +18,13 @@ struct BoardCaps {
     bool    has_rotation;    // IMU-driven CPU rotation in the flush callback
     bool    has_battery;     // AXP2101 battery measurement is meaningful
     bool    has_imu;         // QMI8658 (or compatible) is populated
+
+    // The display bus wants big-endian RGB565. When true, LVGL renders
+    // LV_COLOR_FORMAT_RGB565_SWAPPED and the splash swaps its palette, so the
+    // strips handed to display_hal_draw_bitmap() go out untouched — no
+    // per-pixel swap anywhere on the hot path. Boards leave it false unless
+    // their display.cpp is written for it (the C6 2.16 is).
+    bool    be_pixels;
 };
 
 const BoardCaps& board_caps(void);
