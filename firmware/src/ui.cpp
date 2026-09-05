@@ -413,8 +413,13 @@ static const char* const ABOUT_KEYS[ABOUT_COUNT] = {
 static lv_obj_t* about_value[ABOUT_COUNT];
 static uint32_t  about_last_refresh_ms = 0;
 static uint32_t  preview_last_refresh_ms = 0;
-static int       batt_pct_cached = -1;
+static int       batt_pct_cached = -1;         // the board's own cell (-1 = none fitted)
 static bool      batt_charging_cached = false;
+// The host machine's battery, from the daemon payload ("hb"/"hc"). The header
+// glyph shows the board's own cell when one is fitted, otherwise this — a
+// USB-powered Clawdmeter has nothing of its own worth showing.
+static int       host_batt_pct = -1;
+static bool      host_batt_charging = false;
 
 // ---- Motion ----
 // Toggles and the segment highlight glide (ease-out); page/screen changes are
@@ -566,6 +571,7 @@ static void update_page_dots(void);
 static void refresh_about(void);
 static void apply_header_visibility(void);
 static void render_title(bool force);
+static void refresh_battery_glyph(void);
 
 static bool click_guarded(void) {
     return transitioning || (lv_tick_get() - last_gesture_ms) < GESTURE_CLICK_GUARD_MS;
@@ -1453,10 +1459,14 @@ static void refresh_about(void) {
     lv_label_set_text(about_value[ABOUT_BLE], s_ble_connected ? "Connected" : "Advertising");
     lv_label_set_text(about_value[ABOUT_ADDR], ble_get_mac_address());
 
-    if (!board_caps().has_battery)   snprintf(buf, sizeof(buf), "None");
-    else if (batt_pct_cached < 0)    snprintf(buf, sizeof(buf), "n/a");
-    else snprintf(buf, sizeof(buf), "%d%%%s", batt_pct_cached,
-                  batt_charging_cached ? " \xE2\x80\xA2 charging" : "");
+    if (batt_pct_cached >= 0)
+        snprintf(buf, sizeof(buf), "%d%%%s", batt_pct_cached,
+                 batt_charging_cached ? " \xE2\x80\xA2 charging" : "");
+    else if (host_batt_pct >= 0)
+        snprintf(buf, sizeof(buf), "Host %d%%%s", host_batt_pct,
+                 host_batt_charging ? " \xE2\x80\xA2 charging" : "");
+    else
+        snprintf(buf, sizeof(buf), "None");
     lv_label_set_text(about_value[ABOUT_BATTERY], buf);
 
     const size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -1549,6 +1559,10 @@ void ui_update(const UsageData* data) {
     if (!data->ok) return;          // a {"ok":false} "no data" beat → fall through to idle, keep last numbers
     last_data_ms = lv_tick_get();   // a real usage update just landed
     data_received = true;
+
+    host_batt_pct = data->host_batt_pct;
+    host_batt_charging = data->host_batt_charging;
+    refresh_battery_glyph();
 
     if (data->clock_epoch > 0) {    // daemon supplied wall-clock time → the title clock may run
         clock_base_epoch = data->clock_epoch;
@@ -1660,6 +1674,39 @@ void ui_update(const UsageData* data) {
     }
 }
 
+static bool data_fresh(void) {
+    return data_received && data_ok && (lv_tick_get() - last_data_ms) < DATA_FRESH_MS;
+}
+
+// Which battery the header shows: the board's own cell if fitted, else the
+// host's (only while its data is fresh), else nothing.
+struct BattView { bool shown; bool host; int pct; bool charging; };
+static BattView resolve_battery(void) {
+    BattView v = { false, false, -1, false };
+    if (!battery_img || !settings_get().show_battery) return v;
+    if (batt_pct_cached >= 0) {
+        v.shown = true; v.pct = batt_pct_cached; v.charging = batt_charging_cached;
+    } else if (host_batt_pct >= 0 && data_fresh()) {
+        v.shown = true; v.host = true; v.pct = host_batt_pct; v.charging = host_batt_charging;
+    }
+    return v;
+}
+
+static void refresh_battery_glyph(void) {
+    if (!battery_img) return;
+    const BattView v = resolve_battery();
+    if (v.shown) {
+        int idx;
+        if (v.charging)        idx = 4;
+        else if (v.pct <= 10)  idx = 0;
+        else if (v.pct <= 35)  idx = 1;
+        else if (v.pct <= 75)  idx = 2;
+        else                   idx = 3;
+        lv_image_set_src(battery_img, &battery_dscs[idx]);
+    }
+    apply_header_visibility();
+}
+
 // Pick the usage-view sub-screen: pairing hint (BLE down), the idle "Zzz" screen
 // (connected but data has gone stale), or the live usage panels. Only re-lays-out
 // on an actual change. The animated status line stays visible everywhere — it
@@ -1681,6 +1728,7 @@ static void update_view_state(void) {
     lv_obj_add_flag(usage_group, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(v == 0 ? pair_group : v == 1 ? idle_group : usage_group,
                       LV_OBJ_FLAG_HIDDEN);
+    refresh_battery_glyph();   // a stale host battery disappears with the live data
 }
 
 // The shared header title. On Settings it reads "Settings"; on Usage it shows
@@ -1812,8 +1860,8 @@ static void apply_header_visibility(void) {
         else           lv_obj_clear_flag(lbl_title, LV_OBJ_FLAG_HIDDEN);
     }
     if (battery_img) {
-        if (on_splash || !s.show_battery) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-        else                              lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+        if (on_splash || !resolve_battery().shown) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+        else                                       lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     }
     const bool mascot = !on_splash && s.show_mascot;
     splash_mascot_set_visible(mascot);
@@ -2129,23 +2177,7 @@ void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) 
 }
 
 void ui_update_battery(int percent, bool charging) {
-    batt_pct_cached = percent;
+    batt_pct_cached = percent;          // -1 = the PMU sees no cell
     batt_charging_cached = charging;
-    if (!battery_img) return;
-    int idx;
-    if (charging) {
-        idx = 4;
-    } else if (percent < 0) {
-        idx = 0;
-    } else if (percent <= 10) {
-        idx = 0;
-    } else if (percent <= 35) {
-        idx = 1;
-    } else if (percent <= 75) {
-        idx = 2;
-    } else {
-        idx = 3;
-    }
-    lv_image_set_src(battery_img, &battery_dscs[idx]);
-    apply_header_visibility();
+    refresh_battery_glyph();
 }

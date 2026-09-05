@@ -364,6 +364,67 @@ def read_clock_setting() -> str:
     return "auto"
 
 
+def read_host_battery_setting() -> str:
+    """`host_battery` config option: on|off (default on)."""
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key.strip().lower() == "host_battery":
+                    val = val.strip().lower()
+                    if val in ("off", "on"):
+                        return val
+    except OSError:
+        pass
+    return "on"
+
+
+# --- Host battery ---------------------------------------------------------------
+#
+# The board's own battery glyph means nothing on a USB-powered Clawdmeter (the
+# PMU reports "no cell"), so the daemon offers the HOST's battery instead —
+# the MacBook's charge, on the desk display. Bluetooth's Battery Service only
+# runs peripheral → central, hence it rides along in our own payload as
+# "hb" (percent) + "hc" (1 = charging). Desktop Macs simply omit the fields.
+def parse_pmset_batt(text: str) -> tuple[int, bool] | None:
+    """(percent, charging) from `pmset -g batt` output, or None when no battery.
+
+    Sample line: ` -InternalBattery-0 (id=…)\t85%; discharging; 4:12 remaining present: true`
+    States seen: charging, discharging, charged, finishing charge,
+    "AC attached; not charging".
+    """
+    m = re.search(r"(\d{1,3})%;\s*([^;\n]+)", text or "")
+    if not m:
+        return None
+    pct = max(0, min(100, int(m.group(1))))
+    state = m.group(2).strip().lower()
+    return pct, state in ("charging", "finishing charge")
+
+
+def read_host_battery() -> tuple[int, bool] | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_pmset_batt(out.stdout)
+
+
+def add_host_battery_fields(payload: dict) -> None:
+    """Add "hb"/"hc" (host battery percent / charging) unless disabled or absent."""
+    if read_host_battery_setting() != "on":
+        return
+    hb = read_host_battery()
+    if hb is None:
+        return
+    payload["hb"] = hb[0]
+    payload["hc"] = 1 if hb[1] else 0
+
+
 def add_chime_field(payload: dict) -> None:
     """Add "c":1 to the payload when the config opts in, so the firmware may
     sound the session-reset chime. Omitted entirely when chime is off."""
@@ -558,6 +619,7 @@ async def poll_usage_endpoint(token: str) -> dict | None:
         return None            # not a Pro/Max shape — let the header method classify it
     add_chime_field(payload)   # adds "c":1 iff the config opts in
     add_clock_fields(payload)  # adds "t" + "tf" unless the config turns the clock off
+    add_host_battery_fields(payload)   # adds "hb"/"hc" — the host's battery for the header glyph
     return payload
 
 
@@ -622,6 +684,7 @@ async def poll_api(token: str) -> dict | None:
         }
     add_chime_field(payload)   # adds "c":1 iff the config opts in
     add_clock_fields(payload)   # adds "t" + "tf" iff the config opts in
+    add_host_battery_fields(payload)
     return payload
 
 
