@@ -1,0 +1,184 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" --data-binary @- \"${CLAWDMETER_URL:-http://127.0.0.1:47393}/hook\" >/dev/null 2>&1 || true",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

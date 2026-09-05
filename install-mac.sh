@@ -135,6 +135,24 @@ configure_chime() {
     fi
 }
 
+# Offer the Claude Code companion hooks: Claude Code posts its session events
+# (thinking, tool running, needs you, done) to the daemon, which relays them to
+# the device. Idempotent — companion/install-hooks.py replaces earlier entries.
+configure_companion_hooks() {
+    local ans
+    if [ -t 0 ]; then
+        echo "  The companion shows what Claude Code is doing on the device (and alerts"
+        echo "  you when it needs you). It adds hooks to ~/.claude/settings.json; nothing"
+        echo "  else in that file is touched."
+        read -r -p "  Install the Claude Code companion hooks on this Mac? [Y/n] " ans || ans=""
+        if [[ "$ans" =~ ^[Nn]$ ]]; then
+            echo "  Skipped. Later: python3 $SCRIPT_DIR/companion/install-hooks.py"
+            return 0
+        fi
+    fi
+    "$PYTHON3" "$SCRIPT_DIR/companion/install-hooks.py" || echo "  Warning: hook install failed (see above)."
+}
+
 echo "=== Clawdmeter macOS install ==="
 echo ""
 
@@ -216,6 +234,7 @@ echo "[4/6] Configuring the daemon..."
 configure_config_dirs
 configure_clock
 configure_chime
+configure_companion_hooks
 echo ""
 
 echo "[5/6] Bluetooth permission check..."

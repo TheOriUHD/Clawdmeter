@@ -26,6 +26,16 @@ import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+# Companion (live Claude Code session state, see companion.py) and the usage
+# history behind the device's Trend page (trend.py). Importable both as a plain
+# script (`python claude_usage_daemon.py`) and as the daemon package (tests).
+try:
+    import companion as cc_mod
+    import trend as trend_mod
+except ImportError:  # pragma: no cover - package import path
+    from . import companion as cc_mod
+    from . import trend as trend_mod
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -34,6 +44,8 @@ REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 POLL_INTERVAL = 60
 TICK = 2                 # inner-loop tick: link check + host-battery watch
 HOST_BATT_CHECK_S = 2    # a plug/unplug reaches the device within about this long
+COMPANION_PUSH_MIN_S = 0.25   # coalesce bursts of hook events into one BLE write
+BLE_PAYLOAD_MAX = 500    # firmware rx buffer is 512 bytes incl. NUL; keep a margin
 CONNECT_TIMEOUT = 20.0
 
 # macOS: token lives in Keychain (service "Claude Code-credentials").
@@ -381,6 +393,132 @@ def read_host_battery_setting() -> str:
     except OSError:
         pass
     return "on"
+
+
+def _config_value(key: str) -> str | None:
+    """Raw value of `key` in the config file (last one wins), or None."""
+    found = None
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip().lower() == key:
+                    found = v.strip()
+    except OSError:
+        pass
+    return found
+
+
+def read_companion_setting() -> str:
+    """`companion` config option: on|off (default on) — the Claude Code hook listener."""
+    v = (_config_value("companion") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
+def read_companion_port() -> int:
+    try:
+        port = int(_config_value("companion_port") or cc_mod.COMPANION_PORT)
+    except ValueError:
+        return cc_mod.COMPANION_PORT
+    return port if 1 <= port <= 65535 else cc_mod.COMPANION_PORT
+
+
+def read_companion_bind() -> str:
+    """`companion_bind`: 127.0.0.1 (default) or 0.0.0.0 for hooks arriving over the LAN."""
+    return _config_value("companion_bind") or cc_mod.COMPANION_BIND
+
+
+def read_trend_setting() -> str:
+    """`trend` config option: on|off (default on) — record history for the Trend page."""
+    v = (_config_value("trend") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
+# --- Companion + Trend -------------------------------------------------------------
+#
+# The companion listener (companion.py) turns Claude Code hook events into one
+# "cc" object; the history (trend.py) turns polls into the "tr" object. Both ride
+# on every usage payload, and a companion change also triggers an immediate beat
+# so the device reacts within a BLE write of the event.
+COMPANION = cc_mod.Companion()
+HISTORY: "trend_mod.History | None" = None
+HISTORY_FILE = CONFIG_FILE.parent / "history.json"
+_wake: "asyncio.Event | None" = None    # wakes the connected loop early (refresh / companion)
+_cc_dirty = False
+
+
+def _companion_changed() -> None:
+    global _cc_dirty
+    _cc_dirty = True
+    if _wake is not None:
+        _wake.set()
+
+
+def add_companion_fields(payload: dict) -> None:
+    if read_companion_setting() != "on":
+        return
+    cc = COMPANION.summary()
+    if cc is not None:
+        payload["cc"] = cc
+
+
+def record_history(payload: dict, now: float | None = None) -> None:
+    """Remember this poll for the Trend page (Pro/Max payloads with data only)."""
+    if HISTORY is None or not payload.get("ok") or payload.get("acct") == "ent":
+        return
+    HISTORY.add(time.time() if now is None else now, payload.get("s", 0), payload.get("w", 0))
+    HISTORY.save()
+
+
+def add_trend_fields(payload: dict, now: float | None = None) -> None:
+    if HISTORY is None or read_trend_setting() != "on":
+        return
+    tr = HISTORY.payload(now)
+    if tr is not None:
+        payload["tr"] = tr
+
+
+def finalize_payload(payload: dict) -> dict:
+    """Everything a fresh usage payload carries beyond the numbers themselves."""
+    record_history(payload)
+    add_trend_fields(payload)
+    add_companion_fields(payload)
+    return payload
+
+
+def companion_beat(last_payload: dict | None) -> dict:
+    """The last usage payload re-stamped with the current companion state.
+
+    Before any usage data exists the beat is companion-only ({"cc": …}); the
+    firmware applies "cc" independently of the usage numbers, so the Working
+    page comes alive even while the token is still being looked up.
+    """
+    beat = dict(last_payload) if last_payload else {}
+    beat.pop("cc", None)
+    cc = COMPANION.summary()
+    if cc is not None:
+        beat["cc"] = cc
+    if last_payload:
+        add_clock_fields(beat)
+    return beat
+
+
+def shrink_payload(payload: dict, limit: int = BLE_PAYLOAD_MAX) -> bytes:
+    """Encode compactly; drop the optional extras (trend, then companion) if it
+    would overflow the firmware's receive buffer."""
+    def enc(p: dict) -> bytes:
+        return json.dumps(p, separators=(",", ":")).encode()
+    data = enc(payload)
+    for key in ("tr", "cc"):
+        if len(data) <= limit:
+            break
+        if key in payload:
+            payload = {k: v for k, v in payload.items() if k != key}
+            data = enc(payload)
+    return data
 
 
 # --- Host battery ---------------------------------------------------------------
@@ -844,7 +982,7 @@ async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, 
     active = selector.choose(sessions)
     if len(dirs) > 1:
         log(f"Active plan: {active} (s={sessions[active]})")
-    return payloads[active], False
+    return finalize_payload(payloads[active]), False
 
 
 async def poll_active_payload(selector: PlanSelector = _SELECTOR) -> dict | None:
@@ -865,6 +1003,8 @@ class Session:
     def _on_refresh(self, _char, _data: bytearray) -> None:
         log("Refresh requested by device")
         self.refresh_requested.set()
+        if _wake is not None:
+            _wake.set()
 
     async def setup_refresh_subscription(self) -> None:
         # start_notify awaits CoreBluetooth's CCCD-write confirmation, which
@@ -885,10 +1025,17 @@ class Session:
             log("Refresh subscription timed out; polling without it")
 
     async def write_payload(self, payload: dict) -> bool:
-        data = json.dumps(payload, separators=(",", ":")).encode()
+        data = shrink_payload(payload)
         log(f"Sending: {data.decode()}")
         try:
-            await self.client.write_gatt_char(RX_CHAR_UUID, data, response=False)
+            # Write-without-response is capped at MTU-3 bytes; anything longer
+            # (trend + companion extras) goes as a long write with response.
+            try:
+                mtu = int(self.client.mtu_size or 23)
+            except Exception:  # noqa: BLE001 - backend without MTU info
+                mtu = 23
+            with_response = len(data) > max(20, mtu - 3)
+            await self.client.write_gatt_char(RX_CHAR_UUID, data, response=with_response)
             return True
         except BleakError as e:
             log(f"Write failed: {e}")
@@ -1017,11 +1164,14 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     session = Session(client)
     await session.setup_refresh_subscription()
 
+    global _cc_dirty
     last_poll = 0.0
     used_successfully = False
     last_payload: dict | None = None            # last usage payload that reached the device
     last_batt: tuple[int, bool] | None = None   # host battery it carried
     last_batt_check = 0.0
+    last_cc_push = 0.0
+    _cc_dirty = True                            # a fresh link gets the companion state at once
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
@@ -1066,8 +1216,24 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     if await session.write_payload(host_battery_beat(last_payload, state)):
                         last_batt = state
 
+            # Companion: a Claude Code hook event changed the live state (or a
+            # session timed out) → re-send the last numbers with the new "cc"
+            # right away, coalescing bursts into one write.
+            if COMPANION.expire():
+                _cc_dirty = True
+            if _cc_dirty and read_companion_setting() == "on" and now - last_cc_push >= COMPANION_PUSH_MIN_S:
+                _cc_dirty = False
+                last_cc_push = now
+                beat = companion_beat(last_payload)
+                if "cc" in beat and not await session.write_payload(beat):
+                    _cc_dirty = True                # retry on the next tick
+
             try:
-                await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
+                if _wake is not None:
+                    await asyncio.wait_for(_wake.wait(), timeout=TICK)
+                    _wake.clear()
+                else:
+                    await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
             except asyncio.TimeoutError:
                 pass
     finally:
@@ -1096,6 +1262,18 @@ async def main() -> None:
 
     log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
+
+    global _wake, HISTORY
+    _wake = asyncio.Event()
+    HISTORY = trend_mod.History(HISTORY_FILE)
+    if HISTORY.samples:
+        log(f"Trend history: {len(HISTORY.samples)} samples in {HISTORY_FILE}")
+    cc_server = None
+    if read_companion_setting() == "on":
+        cc_server = await cc_mod.start_companion_server(
+            COMPANION, _companion_changed, read_companion_bind(), read_companion_port(), log=log)
+    else:
+        log("Companion listener off (config: companion = off)")
 
     backoff = 1
     skip_addr: str | None = None  # macOS: a peripheral to skip for one cycle
@@ -1130,6 +1308,9 @@ async def main() -> None:
             backoff = min(backoff * 2, 60)
         else:
             backoff = 1
+
+    if cc_server is not None:
+        cc_server.close()
 
 
 if __name__ == "__main__":
