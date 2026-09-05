@@ -1,0 +1,8 @@
+#!/bin/sh
+# Print the one-liners another machine runs to report its Claude Code sessions
+# to this bridge (the computer with Bluetooth running the daemon). Works from
+# the dev clone and from the installed checkout alike.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PY="$DIR/daemon/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3 || command -v python)"
+exec "$PY" "$DIR/daemon/claude_usage_daemon.py" link

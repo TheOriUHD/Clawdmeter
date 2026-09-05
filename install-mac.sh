@@ -151,6 +151,9 @@ configure_companion_hooks() {
         fi
     fi
     "$PYTHON3" "$SCRIPT_DIR/companion/install-hooks.py" || echo "  Warning: hook install failed (see above)."
+    echo ""
+    echo "  Claude Code on another machine (ssh box, VM, Windows PC)? Run  $SCRIPT_DIR/companion/link"
+    echo "  any time — it prints the one line to paste into that machine."
 }
 
 echo "=== Clawdmeter macOS install ==="

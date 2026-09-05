@@ -26,6 +26,15 @@ from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
+# Companion (live Claude Code session state) + usage history for the Trend page —
+# the same modules the macOS daemon uses. Importable as a script or as the package.
+try:
+    import companion as cc_mod
+    import trend as trend_mod
+except ImportError:  # pragma: no cover - package import path
+    from . import companion as cc_mod
+    from . import trend as trend_mod
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -34,6 +43,8 @@ REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 POLL_INTERVAL = 60
 TICK = 5
 HOST_BATT_CHECK_S = 10   # PowerShell/CIM is slow; still far quicker than the 60 s poll
+COMPANION_PUSH_MIN_S = 0.25   # coalesce bursts of hook events into one BLE write
+BLE_PAYLOAD_MAX = 500    # firmware rx buffer is 512 bytes incl. NUL; keep a margin
 CONNECT_RETRIES = 3        # D-01: attempts before giving up on a device
 CONNECT_RETRY_DELAY = 2.0  # D-01: seconds between failed connect attempts
 ZOMBIE_BREAK_LIMIT = 1     # D-03: consecutive write failures before abandoning a half-open link
@@ -180,6 +191,121 @@ def read_host_battery_setting() -> str:
 # Win32_Battery via PowerShell/CIM. The flag means "plugged in": BatteryStatus
 # 2 = on AC, 3 = fully charged (on AC), 6–9 = charging variants; 1/4/5 =
 # discharging. Desktops without a battery return nothing.
+def _config_value(key: str) -> str | None:
+    """Raw value of `key` in the config file (last one wins), or None."""
+    found = None
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip().lower() == key:
+                    found = v.strip()
+    except OSError:
+        pass
+    return found
+
+
+def read_companion_setting() -> str:
+    v = (_config_value("companion") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
+def read_companion_port() -> int:
+    try:
+        port = int(_config_value("companion_port") or cc_mod.COMPANION_PORT)
+    except ValueError:
+        return cc_mod.COMPANION_PORT
+    return port if 1 <= port <= 65535 else cc_mod.COMPANION_PORT
+
+
+def read_companion_bind() -> str:
+    return _config_value("companion_bind") or cc_mod.COMPANION_BIND
+
+
+def read_trend_setting() -> str:
+    v = (_config_value("trend") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
+TOKEN_FILE = CONFIG_FILE.parent / "companion.token"
+
+
+def companion_token() -> str:
+    return cc_mod.load_or_create_token(TOKEN_FILE, _config_value("companion_token"))
+
+
+# --- Companion + Trend (see the macOS daemon for the long version) -------------------
+COMPANION = cc_mod.Companion()
+HISTORY: "trend_mod.History | None" = None
+HISTORY_FILE = CONFIG_FILE.parent / "history.json"
+_cc_wake: "asyncio.Event | None" = None
+_cc_dirty = False
+
+
+def _companion_changed() -> None:
+    global _cc_dirty
+    _cc_dirty = True
+    if _cc_wake is not None:
+        _cc_wake.set()
+
+
+def add_companion_fields(payload: dict) -> None:
+    if read_companion_setting() != "on":
+        return
+    cc = COMPANION.summary()
+    if cc is not None:
+        payload["cc"] = cc
+
+
+def record_history(payload: dict, now: float | None = None) -> None:
+    if HISTORY is None or not payload.get("ok") or payload.get("acct") == "ent":
+        return
+    HISTORY.add(time.time() if now is None else now, payload.get("s", 0), payload.get("w", 0))
+    HISTORY.save()
+
+
+def add_trend_fields(payload: dict, now: float | None = None) -> None:
+    if HISTORY is None or read_trend_setting() != "on":
+        return
+    tr = HISTORY.payload(now)
+    if tr is not None:
+        payload["tr"] = tr
+
+
+def finalize_payload(payload: dict) -> dict:
+    record_history(payload)
+    add_trend_fields(payload)
+    add_companion_fields(payload)
+    return payload
+
+
+def companion_beat(last_payload: dict | None) -> dict:
+    beat = dict(last_payload) if last_payload else {}
+    beat.pop("cc", None)
+    cc = COMPANION.summary()
+    if cc is not None:
+        beat["cc"] = cc
+    if last_payload:
+        add_clock_fields(beat)
+    return beat
+
+
+def shrink_payload(payload: dict, limit: int = BLE_PAYLOAD_MAX) -> bytes:
+    def enc(p: dict) -> bytes:
+        return json.dumps(p, separators=(",", ":"), ensure_ascii=False).encode()
+    data = enc(payload)
+    for key in ("tr", "cc"):
+        if len(data) <= limit:
+            break
+        if key in payload:
+            payload = {k: v for k, v in payload.items() if k != key}
+            data = enc(payload)
+    return data
+
+
 def parse_win32_battery(text: str) -> tuple[int, bool] | None:
     parts = (text or "").split()
     if len(parts) < 2:
@@ -595,6 +721,8 @@ class Session:
     def _on_refresh(self, _char, _data: bytearray) -> None:
         log("Refresh requested by device")
         self.refresh_requested.set()
+        if _cc_wake is not None:
+            _cc_wake.set()
 
     async def setup_refresh_subscription(self) -> None:
         # The refresh subscription is optional — the 60s poll loop works without it.
@@ -609,10 +737,20 @@ class Session:
             log(f"Refresh subscription unavailable: {e}")
 
     async def write_payload(self, payload: dict) -> bool:
-        data = json.dumps(payload, separators=(",", ":")).encode()
-        log(f"Sending: {data.decode()}")
+        data = shrink_payload(payload)
+        if "cc" in payload and len(payload) <= 2:
+            log(f"Sending ({len(data)} B): {COMPANION.describe()}")     # companion-only beat
+        else:
+            log(f"Sending: {data.decode()}")
         try:
-            await self.client.write_gatt_char(RX_CHAR_UUID, data, response=False)
+            # Write-without-response is capped at MTU-3 bytes; longer payloads
+            # (trend + companion extras) go as a long write with response.
+            try:
+                mtu = int(getattr(self.client, "mtu_size", 23) or 23)
+            except Exception:  # noqa: BLE001
+                mtu = 23
+            with_response = len(data) > max(20, mtu - 3)
+            await self.client.write_gatt_char(RX_CHAR_UUID, data, response=with_response)
             return True
         except (BleakError, OSError) as e:
             # WinRT can raise a raw OSError/WinError (NOT wrapped as BleakError)
@@ -825,9 +963,13 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
             return True
         return False
 
+    global _cc_dirty, _cc_wake
+    _cc_wake = asyncio.Event()                  # per connection: bound to this loop, wakes on hook events
     last_payload = None
     last_batt = None
     last_batt_check = 0.0
+    last_cc_push = 0.0
+    _cc_dirty = True                            # a fresh link gets the companion state at once
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
@@ -871,6 +1013,8 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                             payload = await poll_api(token)
                             if payload is not None:
                                 _note_usage_source("headers")
+                        if payload is not None:
+                            payload = finalize_payload(payload)    # + "tr" history, + "cc" companion
                     except AuthError:
                         # Pure free-ride: we never refresh. A 401/403 means Claude Code's
                         # token has expired and only Claude Code (its owner) can re-seed it.
@@ -906,12 +1050,33 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                     # as an auth problem (SC#5). Leave tray state unchanged; the next
                     # tick retries and set_connected() recovers it.
 
-            # Wake on a refresh request OR a stop, whichever comes first. Waking
-            # promptly on stop_event is what lets the finally below run
-            # client.disconnect() before the process exits, so the peer gets a
-            # clean GATT disconnect (returns to its waiting screen) instead of
-            # being left frozen on stale data after Quit (SC#3 graceful shutdown).
-            await _wait_first(session.refresh_requested, stop_event, timeout=TICK)
+            # Companion: a Claude Code hook event changed the live state (or a
+            # session timed out) → re-send the last numbers with the new "cc"
+            # right away, coalescing bursts into one write.
+            if COMPANION.expire():
+                _cc_dirty = True
+            if _cc_dirty and read_companion_setting() == "on" and now - last_cc_push >= COMPANION_PUSH_MIN_S:
+                _cc_dirty = False
+                last_cc_push = now
+                beat = companion_beat(last_payload)
+                if "cc" in beat:
+                    if await session.write_payload(beat):
+                        consecutive_failures = 0
+                    else:
+                        _cc_dirty = True                # retry on the next tick
+                        if note_write_failure():
+                            break
+
+            # Wake on a refresh request, a companion event OR a stop, whichever
+            # comes first. Waking promptly on stop_event is what lets the finally
+            # below run client.disconnect() before the process exits, so the peer
+            # gets a clean GATT disconnect (returns to its waiting screen) instead
+            # of being left frozen on stale data after Quit (SC#3 graceful shutdown).
+            if _cc_wake is not None:
+                await _wait_first(session.refresh_requested, stop_event, _cc_wake, timeout=TICK)
+                _cc_wake.clear()
+            else:
+                await _wait_first(session.refresh_requested, stop_event, timeout=TICK)
     finally:
         # Clean GATT disconnect on the way out — this is what tells the peripheral
         # the link is gone. WinRT can surface a raw OSError (not BleakError) here,
@@ -971,6 +1136,21 @@ async def main(tray_state=None) -> None:
     log("=== Claude Usage Tracker Daemon (BLE, Windows) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
+    global HISTORY
+    HISTORY = trend_mod.History(HISTORY_FILE)
+    if HISTORY.samples:
+        log(f"Trend history: {len(HISTORY.samples)} samples in {HISTORY_FILE}")
+    cc_server = None
+    if read_companion_setting() == "on":
+        token = companion_token()
+        cc_server = await cc_mod.start_companion_server(
+            COMPANION, _companion_changed, read_companion_bind(), read_companion_port(), log=log, token=token)
+        if cc_server is not None:
+            for line in cc_mod.join_text(read_companion_port(), token).splitlines():
+                log("  " + line if line else "")
+    else:
+        log("Companion listener off (config: companion = off)")
+
     # D-05: two distinct backoff regimes — slow-search (device absent) vs fast-reconnect (link dropped)
     search_backoff = 1     # caps at 60s — gentle, for a device that is genuinely absent/off
     reconnect_backoff = 1  # caps at RECONNECT_BACKOFF_CAP — fast, to clear the 120s SLA after a drop
@@ -1004,8 +1184,16 @@ async def main(tray_state=None) -> None:
             reconnect_backoff = 1
             search_backoff = 1
 
+    if cc_server is not None:
+        cc_server.close()
+
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "link":
+        # `python claude_usage_daemon_windows.py link` → the one-liners another
+        # machine runs to report its Claude Code sessions to this bridge.
+        print(cc_mod.join_text(read_companion_port(), companion_token()))
+        sys.exit(0)
     if sys.platform != "win32":
         print(
             "Warning: running under Linux/WSL — WinRT BLE will not be available.",

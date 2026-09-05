@@ -38,12 +38,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
+import shutil
 import socket
+import subprocess
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 COMPANION_PORT = 47393
-COMPANION_BIND = "127.0.0.1"
+COMPANION_BIND = "0.0.0.0"       # every interface: other machines join over the network (token-protected)
+DEFAULT_URL = "http://127.0.0.1:47393"
+TOKEN_HEADER = "x-clawdmeter-token"
 
 # Device state codes (mirror firmware/src/data.h CompanionState).
 CC_NONE, CC_IDLE, CC_THINKING, CC_TOOL, CC_DONE, CC_ATTENTION, CC_ERROR, CC_COMPACTING, CC_TURN_DONE = range(9)
@@ -335,6 +341,256 @@ class Companion:
         return f"{s.get('n', 0)} session(s), {names.get(s.get('s'), '?')}: {s.get('l', '')}"
 
 
+# ---- The hooks themselves ------------------------------------------------------
+#
+# One shell line per Claude Code event: post the JSON Claude Code pipes to stdin
+# to the bridge, in the background (`async`), never failing the tool call
+# (`|| true`, 2 s cap). companion/hooks.json and the plugin copy are generated
+# from hooks_fragment() — this is the single source of truth.
+HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+               "PermissionRequest", "PermissionDenied", "Notification", "Stop", "StopFailure",
+               "SubagentStart", "SubagentStop", "PreCompact", "PostCompact", "SessionEnd"]
+
+
+def hook_command(url: str = DEFAULT_URL, token: str | None = None) -> str:
+    """The curl line. CLAWDMETER_URL in the environment overrides the baked-in bridge URL."""
+    url = url.rstrip("/")
+    auth = f" -H 'X-Clawdmeter-Token: {token}'" if token else ""
+    return ("curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' "
+            "-H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\"" + auth +
+            " --data-binary @- \"${CLAWDMETER_URL:-" + url + "}/hook\" >/dev/null 2>&1 || true")
+
+
+def hooks_fragment(url: str = DEFAULT_URL, token: str | None = None) -> dict:
+    """{"hooks": {<event>: [{"hooks": [{command}]}]}} as it goes into settings.json."""
+    cmd = hook_command(url, token)
+    return {"hooks": {ev: [{"hooks": [{"type": "command", "command": cmd, "async": True, "timeout": 5}]}]
+                      for ev in HOOK_EVENTS}}
+
+
+# The merge logic the served installers carry, in Python and in JavaScript: drop
+# every hook group of ours (marker CLAWDMETER_URL), append the fresh ones, keep
+# everything else in settings.json byte-for-byte in spirit.
+MERGE_PY = r"""
+import json, os, shutil, sys
+settings_path, frag_path, uninstall = sys.argv[1], sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == "--uninstall"
+settings = {}
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        text = f.read()
+    settings = json.loads(text) if text.strip() else {}
+    if not isinstance(settings, dict):
+        sys.exit("settings.json does not hold a JSON object")
+    shutil.copy2(settings_path, settings_path + ".bak")
+with open(frag_path) as f:
+    frag = json.load(f)["hooks"]
+hooks = settings.get("hooks") if isinstance(settings.get("hooks"), dict) else {}
+def ours(g):
+    return isinstance(g, dict) and any("CLAWDMETER_URL" in str(h.get("command", "")) for h in g.get("hooks", []) or [] if isinstance(h, dict))
+for ev in list(hooks):
+    kept = [g for g in hooks[ev] if not ours(g)] if isinstance(hooks[ev], list) else hooks[ev]
+    if kept: hooks[ev] = kept
+    else: del hooks[ev]
+if not uninstall:
+    for ev, groups in frag.items():
+        hooks.setdefault(ev, []).extend(groups)
+if hooks: settings["hooks"] = hooks
+else: settings.pop("hooks", None)
+os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+"""
+
+MERGE_JS = r"""
+const fs = require("fs"), path = require("path");
+const [settingsPath, fragPath, flag] = process.argv.slice(2);
+const uninstall = flag === "--uninstall";
+let settings = {};
+if (fs.existsSync(settingsPath)) {
+  const text = fs.readFileSync(settingsPath, "utf8");
+  settings = text.trim() ? JSON.parse(text) : {};
+  if (typeof settings !== "object" || Array.isArray(settings) || settings === null) { console.error("settings.json does not hold a JSON object"); process.exit(1); }
+  fs.copyFileSync(settingsPath, settingsPath + ".bak");
+}
+const frag = JSON.parse(fs.readFileSync(fragPath, "utf8")).hooks;
+const hooks = (settings.hooks && typeof settings.hooks === "object" && !Array.isArray(settings.hooks)) ? settings.hooks : {};
+const ours = g => g && typeof g === "object" && Array.isArray(g.hooks) && g.hooks.some(h => h && String(h.command || "").includes("CLAWDMETER_URL"));
+for (const ev of Object.keys(hooks)) {
+  if (!Array.isArray(hooks[ev])) continue;
+  const kept = hooks[ev].filter(g => !ours(g));
+  if (kept.length) hooks[ev] = kept; else delete hooks[ev];
+}
+if (!uninstall) for (const [ev, groups] of Object.entries(frag)) { (hooks[ev] = hooks[ev] || []).push(...groups); }
+if (Object.keys(hooks).length) settings.hooks = hooks; else delete settings.hooks;
+fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+"""
+
+
+def render_install_sh(base_url: str, token: str) -> str:
+    """A self-contained POSIX installer the bridge serves at /install/<token>.
+
+    Works on any Linux/macOS box that has curl plus python3 or node (a VM, a
+    container, a dev server); `sh -s -- --uninstall` removes the hooks again.
+    """
+    frag = json.dumps(hooks_fragment(base_url, token), indent=2)
+    return f"""#!/bin/sh
+# Clawdmeter companion — installs the Claude Code hooks that report this
+# machine's sessions to the bridge at {base_url}. Served by the bridge itself.
+# Re-run any time (idempotent); `... | sh -s -- --uninstall` removes them.
+set -e
+SETTINGS="${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/settings.json"
+TMP="$(mktemp -d 2>/dev/null || mktemp -d -t clawdmeter)"
+trap 'rm -rf "$TMP"' EXIT
+cat > "$TMP/hooks.json" <<'CLAWD_HOOKS'
+{frag}
+CLAWD_HOOKS
+cat > "$TMP/merge.py" <<'CLAWD_PY'
+{MERGE_PY.strip()}
+CLAWD_PY
+cat > "$TMP/merge.js" <<'CLAWD_JS'
+{MERGE_JS.strip()}
+CLAWD_JS
+if command -v python3 >/dev/null 2>&1; then
+    python3 "$TMP/merge.py" "$SETTINGS" "$TMP/hooks.json" "$@"
+elif command -v node >/dev/null 2>&1; then
+    node "$TMP/merge.js" "$SETTINGS" "$TMP/hooks.json" "$@"
+else
+    echo "Clawdmeter: need python3 or node to edit $SETTINGS" >&2
+    exit 1
+fi
+if [ "$1" = "--uninstall" ]; then
+    echo "Clawdmeter companion hooks removed from $SETTINGS"
+else
+    command -v curl >/dev/null 2>&1 || echo "warning: curl not found — the hooks need it" >&2
+    echo "Clawdmeter companion hooks installed in $SETTINGS"
+    echo "New Claude Code sessions on this machine report to {base_url}"
+fi
+"""
+
+
+def render_install_ps1(base_url: str, token: str) -> str:
+    """A PowerShell installer for Windows workers: `irm <url> | iex` (no Python needed).
+
+    Claude Code on Windows runs command hooks through Git Bash, which ships curl,
+    so the hook line itself is the same as everywhere else.
+    """
+    frag = json.dumps(hooks_fragment(base_url, token), indent=2)
+    return f"""# Clawdmeter companion — installs the Claude Code hooks that report this
+# machine's sessions to the bridge at {base_url}. Served by the bridge itself.
+$ErrorActionPreference = 'Stop'
+$dir = if ($env:CLAUDE_CONFIG_DIR) {{ $env:CLAUDE_CONFIG_DIR }} else {{ Join-Path $HOME '.claude' }}
+$path = Join-Path $dir 'settings.json'
+$frag = @'
+{frag}
+'@ | ConvertFrom-Json
+$settings = [pscustomobject]@{{}}
+if (Test-Path $path) {{
+    $raw = Get-Content $path -Raw
+    if ($raw.Trim()) {{ $settings = $raw | ConvertFrom-Json }}
+    Copy-Item $path "$path.bak" -Force
+}}
+if (-not ($settings.PSObject.Properties.Name -contains 'hooks')) {{
+    $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{{}})
+}}
+$ours = {{ param($g) ($g.hooks | ForEach-Object {{ [string]$_.command }}) -join ' ' -match 'CLAWDMETER_URL' }}
+foreach ($ev in @($settings.hooks.PSObject.Properties.Name)) {{
+    $kept = @($settings.hooks.$ev | Where-Object {{ -not (& $ours $_) }})
+    if ($kept.Count) {{ $settings.hooks.$ev = $kept }} else {{ $settings.hooks.PSObject.Properties.Remove($ev) }}
+}}
+foreach ($ev in $frag.hooks.PSObject.Properties.Name) {{
+    $new = @($frag.hooks.$ev)
+    if ($settings.hooks.PSObject.Properties.Name -contains $ev) {{
+        $settings.hooks.$ev = @($settings.hooks.$ev) + $new
+    }} else {{
+        $settings.hooks | Add-Member -NotePropertyName $ev -NotePropertyValue $new
+    }}
+}}
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$settings | ConvertTo-Json -Depth 12 | Set-Content -Path $path -Encoding UTF8
+Write-Host "Clawdmeter companion hooks installed in $path"
+Write-Host "New Claude Code sessions on this machine report to {base_url}"
+"""
+
+
+# ---- Token + addresses -----------------------------------------------------------
+def load_or_create_token(path: Path, override: str | None = None) -> str:
+    """The shared secret other machines present. From the config (`companion_token`)
+    when set, else a generated one kept next to the config file."""
+    if override and override.strip():
+        return override.strip()
+    path = Path(path)
+    try:
+        tok = path.read_text().strip()
+        if tok:
+            return tok
+    except OSError:
+        pass
+    tok = secrets.token_hex(10)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tok + "\n")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return tok
+
+
+def local_addresses() -> list[str]:
+    """Addresses another machine might reach this one on: the default-route IPv4,
+    every IPv4 the hostname resolves to, a Tailscale address, and <host>.local."""
+    out: list[str] = []
+
+    def add(a: str) -> None:
+        if a and not a.startswith("127.") and a not in out:
+            out.append(a)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))          # no packet is sent; picks the default route
+        add(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            add(info[4][0])
+    except OSError:
+        pass
+    if shutil.which("tailscale"):
+        try:
+            r = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                add(line.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    host = hostname_short()
+    if host:
+        add(f"{host}.local")
+    return out
+
+
+def join_text(port: int, token: str, addresses: list[str] | None = None) -> str:
+    """The lines a user pastes into another machine to make it report here."""
+    addrs = local_addresses() if addresses is None else addresses
+    if not addrs:
+        addrs = ["<this-machine>"]
+    lines = ["Clawdmeter companion — make another machine report to this bridge.",
+             "On the machine that runs Claude Code, run ONE of these (whichever address it can reach):", ""]
+    for a in addrs:
+        lines.append(f"  curl -fsSL http://{a}:{port}/install/{token} | sh")
+    lines += ["", "Windows (PowerShell):", ""]
+    for a in addrs[:1]:
+        lines.append(f"  irm http://{a}:{port}/install.ps1/{token} | iex")
+    lines += ["", f"Check from there:  curl -s http://<bridge>:{port}/state/{token}",
+              "Remove later:      ... /install/<token> | sh -s -- --uninstall",
+              "The token lives next to the daemon config (companion.token); anything not from this machine must present it."]
+    return "\n".join(lines)
+
+
 # ---- HTTP listener ---------------------------------------------------------------
 #
 # A deliberately tiny HTTP/1.1 server: the hook posts a JSON body to /hook and
@@ -373,22 +629,43 @@ def _response(status: int, body: str, ctype: str = "text/plain") -> bytes:
             f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data
 
 
+def _is_loopback(addr: str) -> bool:
+    return addr in ("127.0.0.1", "::1", "::ffff:127.0.0.1") or addr.startswith("127.")
+
+
 async def start_companion_server(companion: Companion, on_change, host: str = COMPANION_BIND,
-                                 port: int = COMPANION_PORT, log=print):
+                                 port: int = COMPANION_PORT, log=print, token: str | None = None):
     """Listen for hook events; call on_change() whenever the summary changes.
+
+    Loopback callers (the bridge's own hooks, an SSH tunnel) need nothing; any
+    other machine must present `token` (X-Clawdmeter-Token header, or in the
+    path for the GET routes). GET /install/<token> and /install.ps1/<token>
+    hand out installers with this bridge's address and token baked in — the
+    one-liners join_text() prints.
 
     Returns the asyncio server, or None when the port is busy (another daemon
     instance) — the companion then stays off rather than crashing the daemon.
     """
+
+    def authed(headers: dict, remote: str, path_token: str | None = None) -> bool:
+        if not token or not remote:
+            return True
+        return headers.get(TOKEN_HEADER, "") == token or path_token == token
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             method, path, headers, body = await _read_request(reader)
             peer = writer.get_extra_info("peername")
             remote = ""
-            if peer and peer[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            if peer and not _is_loopback(str(peer[0])):
                 remote = str(peer[0])
-            if method == "POST" and path.rstrip("/") in ("/hook", "/event", ""):
+            parts = [x for x in path.split("?", 1)[0].split("/") if x]
+            route = parts[0] if parts else ""
+            arg = parts[1] if len(parts) > 1 else None
+            if method == "POST" and route in ("hook", "event", ""):
+                if not authed(headers, remote, arg):
+                    writer.write(_response(401, "token required (see: companion link)"))
+                    return
                 try:
                     ev = json.loads(body.decode("utf-8", "replace") or "{}")
                 except ValueError:
@@ -401,10 +678,25 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
                 writer.write(_response(200, "ok"))
                 if changed:
                     on_change()          # the beat's log line says what changed
-            elif method == "GET" and path.rstrip("/") in ("/state", "/status"):
+            elif method == "GET" and route in ("state", "status"):
+                if not authed(headers, remote, arg):
+                    writer.write(_response(401, "token required"))
+                    return
                 writer.write(_response(200, json.dumps(companion.summary() or {}), "application/json"))
-            elif method == "GET" and path in ("", "/"):
-                writer.write(_response(200, "Clawdmeter companion: POST Claude Code hook JSON to /hook\n"))
+            elif method == "GET" and route in ("install", "install.sh", "install.ps1"):
+                if not token or arg != token:
+                    writer.write(_response(404, "not found"))
+                    return
+                # The address the client used to reach us is the one its hooks should use.
+                host_hdr = headers.get("host") or f"127.0.0.1:{port}"
+                base = f"http://{host_hdr}"
+                if route == "install.ps1":
+                    writer.write(_response(200, render_install_ps1(base, token), "text/plain"))
+                else:
+                    writer.write(_response(200, render_install_sh(base, token), "text/x-shellscript"))
+                log(f"Companion: served the {'PowerShell' if route == 'install.ps1' else 'shell'} installer to {remote or 'this machine'}")
+            elif method == "GET" and route == "":
+                writer.write(_response(200, "Clawdmeter companion bridge. Run `companion link` on the bridge for the join command.\n"))
             else:
                 writer.write(_response(404, "not found"))
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError, UnicodeDecodeError):
@@ -426,7 +718,7 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
         companion.enabled = False
         return None
     companion.enabled = True
-    log(f"Companion listening on http://{host}:{port}/hook (Claude Code hooks)")
+    log(f"Companion listening on {host}:{port} (Claude Code hooks; other machines join with `companion link`)")
     return server
 
 

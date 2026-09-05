@@ -44,24 +44,32 @@ host_battery = on
 # Claude Code companion — live session state on the device. Claude Code hooks
 # post each event (prompt sent, tool running, permission needed, turn done) to
 # the daemon, which forwards a compact state to the device: the status line
-# reads what Claude is doing, the Working page slides in, and the device glows
-# and chimes when Claude needs you. Install the hooks with
-#   python3 companion/install-hooks.py          (this machine)
-#   curl -fsSL https://raw.githubusercontent.com/TheOriUHD/Clawdmeter/main/companion/install-hooks.sh | sh
-#                                               (a machine you ssh into; add
-#                                                `RemoteForward 47393 127.0.0.1:47393`
-#                                                to that host in ~/.ssh/config)
-# or as a Claude Code plugin: `claude plugin marketplace add TheOriUHD/Clawdmeter`
-# then `claude plugin install clawdmeter-companion@clawdmeter`.
+# reads what Claude is actually doing, the Working page slides in, and the
+# device glows and chimes when Claude needs you.
+#
+# The machine running this daemon is the BRIDGE (it has the Bluetooth link).
+# Claude Code can run on the bridge itself or on any other machine that can
+# reach it over the network — a dev box you ssh into, a VM, a container.
+#   bridge:         install-mac.sh offers the hooks; or python3 companion/install-hooks.py
+#   other machines: run `companion/link` on the bridge and paste the printed
+#                   line into the other machine, e.g.
+#                     curl -fsSL http://192.168.1.23:47393/install/<token> | sh
+#                     irm  http://192.168.1.23:47393/install.ps1/<token> | iex   (Windows PowerShell)
+#                   That installer comes from the daemon itself with the address
+#                   and token baked in (needs curl + python3 or node; PowerShell
+#                   needs nothing). `... | sh -s -- --uninstall` removes it.
 #   on  = listen for hook events (default)
 #   off = no listener, no companion data
 companion = on
-# Where the listener accepts hook posts. Loopback only by default — remote
-# machines reach it through an SSH tunnel. Bind 0.0.0.0 only on a trusted LAN
-# (Tailscale etc.) and point remote hooks at http://<this-mac>:47393 with
-# `install-hooks.py --url`.
+# Port and interfaces. Bound to every interface by default so other machines
+# can join; anything not coming from the bridge itself must present the token.
+# Set companion_bind = 127.0.0.1 to accept only this machine (then other
+# machines need an SSH tunnel: RemoteForward 47393 127.0.0.1:47393).
 companion_port = 47393
-companion_bind = 127.0.0.1
+companion_bind = 0.0.0.0
+# The token remote hooks present. Generated on first start and kept next to
+# this file in companion.token; set it here to choose your own.
+# companion_token = my-secret
 
 # Trend page — record every poll (session %, weekly %) so the device can draw
 # the last 24 hours and the last 7 days. History lives next to this file in
