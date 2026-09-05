@@ -25,9 +25,11 @@ makes the device more functional while keeping its design language intact:
   change. Plans without one have a single face and the classic card, pixel for
   pixel. (A third full card doesn't fit a 480 px panel, and a shrunken row
   looked like an afterthought — faces keep every limit at full size.)
-- **Touch-first settings with real controls.** Swipe left on the Usage
-  screen (the screens slide) for three pages, every control sized for a finger
-  on the 39 mm panel and persisted across reboots:
+- **Touch-first settings with real controls.** Swipe **up** on the Usage
+  screen — Settings follows your finger in from below — for three pages,
+  every control sized for a finger on the 39 mm panel and persisted across
+  reboots. Swipe **down** from any Settings page and you're home; swipe
+  left/right to page (the pages track your finger and snap on release):
   page 1 — **Clock** as a segmented picker (Off / Auto / 12h / 24h, the accent
   highlight glides to your choice, with a live preview of what the title will
   show) plus **Battery icon** and **Mascot** as animated toggles;
@@ -35,8 +37,8 @@ makes the device more functional while keeping its design language intact:
   live), **Sleep after** as a stepped slider (5 min … Never), **Status line**
   toggle and the **Pairing** button (two taps forget the bonded host and
   re-advertise); page 3 — **About** (board, firmware, Bluetooth state and
-  address, battery, free RAM, uptime). Dots show the page; swipe right to go
-  back. A tap on the Usage screen still toggles the splash.
+  address, battery, free RAM, uptime). Dots show the page. A tap on the Usage
+  screen still toggles the splash.
 - **Token-free daemon.** The macOS and Windows daemons read the official
   `/api/oauth/usage` endpoint — the same data `claude /usage` renders — instead
   of spending a 1-token message per poll. A `429` benches the endpoint for 15
@@ -60,7 +62,7 @@ never send it.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe left on Usage for the three Settings pages (clock & toggles, sliders & pairing, About); swipe right to go back. On plans with a Fable limit, tap the Weekly card to flip between its faces.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe up on Usage for the three Settings pages (clock & toggles, sliders & pairing, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |
