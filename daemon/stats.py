@@ -22,7 +22,7 @@ import re
 import time
 from pathlib import Path
 
-CACHE_VERSION = 2      # bumped when the parse changes: the whole corpus is rescanned
+CACHE_VERSION = 3      # bumped when the parse changes: the whole corpus is rescanned
 HEAT_WEEKS = 24
 MAX_LINE_SCAN = 4 * 1024 * 1024      # a line longer than this is skipped, not parsed
 
@@ -30,8 +30,10 @@ MAX_LINE_SCAN = 4 * 1024 * 1024      # a line longer than this is skipped, not p
 _TYPE_RE = re.compile(rb'"type"\s*:\s*"(user|assistant)"')
 _TS_RE = re.compile(rb'"timestamp"\s*:\s*"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)')
 _MODEL_RE = re.compile(rb'"model"\s*:\s*"([^"]{1,64})"')
-_USAGE_RES = [re.compile(rb'"%s"\s*:\s*(\d+)' % k) for k in
-              (b"input_tokens", b"output_tokens", b"cache_creation_input_tokens", b"cache_read_input_tokens")]
+# "Total tokens" the way the Claude app counts it: what went in and what came
+# out — prompt-cache reads and writes are billing details, not conversation.
+_USAGE_RES = [re.compile(rb'"%s"\s*:\s*(\d+)' % k) for k in (b"input_tokens", b"output_tokens")]
+_SIDECHAIN_RE = re.compile(rb'"isSidechain"\s*:\s*true')
 
 
 def _empty_entry() -> dict:
@@ -149,11 +151,15 @@ class ClaudeStats:
                     entry["days"][day] = entry["days"].get(day, 0) + 1
                     entry["hours"][hour] += 1
             if kind == b"assistant":
-                mm = _MODEL_RE.search(line)
-                if mm:
-                    model = mm.group(1).decode("utf-8", "replace")
-                    if model and not model.startswith("<"):
-                        entry["models"][model] = entry["models"].get(model, 0) + 1
+                # Favourite model: the model YOU talk to — main-transcript turns
+                # only (subagent files and sidechain lines run whatever the
+                # agent picked), grouped by family + major ("Fable 5").
+                if not entry.get("agent") and not _SIDECHAIN_RE.search(line):
+                    mm = _MODEL_RE.search(line)
+                    if mm:
+                        label = model_family_label(mm.group(1).decode("utf-8", "replace"))
+                        if label:
+                            entry["models"][label] = entry["models"].get(label, 0) + 1
                 for rx in _USAGE_RES:
                     um = rx.search(line)
                     if um:
@@ -263,7 +269,7 @@ class ClaudeStats:
             "sessions": t["sessions"], "messages": t["messages"], "tokens": t["tokens"],
             "active_days": sum(1 for n in t["days"].values() if n > 0),
             "streak": cur, "best_streak": longest, "peak_hour": peak,
-            "model": model_family_label(fav), "days": t["days"], "today": today,
+            "model": fav, "days": t["days"], "today": today,
         }
 
     @staticmethod
