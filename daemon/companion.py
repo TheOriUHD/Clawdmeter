@@ -57,7 +57,7 @@ ATTENTION_STATES = (CC_ATTENTION, CC_TURN_DONE)
 WORKING_STATES = (CC_THINKING, CC_TOOL, CC_COMPACTING)
 
 LONG_TURN_S = 20.0          # a turn at least this long ends in CC_TURN_DONE (nudge) rather than CC_DONE
-DONE_TO_IDLE_S = 10 * 60    # "done" fades to plain idle after this
+DONE_TO_IDLE_S = 60         # "your turn" fades to the calm green Ready after a minute
 ACTIVE_STALE_S = 30 * 60    # an active state with no events this long is presumed dead
 IDLE_STALE_S = 6 * 3600     # an idle session with no events this long is dropped
 LABEL_MAX = 24

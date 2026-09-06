@@ -46,8 +46,8 @@ def test_scan_counts_and_incremental_append(tmp_path):
     assert st.refresh() is True
     t = st.totals()
     assert t["sessions"] == 1                       # the agent file is not a session; the keeper dir is excluded
-    assert t["messages"] == 5 and t["tokens"] == 10 + 20 + 1000 + 100 + 5 + 5 + 1 + 1
-    assert t["models"] == {"claude-fable-5-1": 1, "claude-opus-5": 1, "claude-haiku-4-5-20251001": 1}
+    assert t["messages"] == 5 and t["tokens"] == 10 + 20 + 5 + 5 + 1 + 1        # in + out only, no cache
+    assert t["models"] == {"Fable 5": 1, "Opus 5": 1}                            # main transcript only, by family
     # Unchanged files are skipped, appended lines are picked up from the saved offset.
     assert st.refresh() is False
     with open(s1, "a") as fh:
@@ -77,7 +77,7 @@ def test_summary_streaks_peak_and_payload(tmp_path):
     now = time.mktime((2026, 9, 2, 23, 0, 0, 0, 0, -1))
     s = st.summary(now)
     assert s["sessions"] == 1 and s["active_days"] == 2 and s["streak"] == 2 and s["best_streak"] == 2
-    assert s["model"] in ("Fable 5", "Opus 5", "Haiku 4.5")
+    assert s["model"] in ("Fable 5", "Opus 5")
     p = st.payload(now, weeks=4)
     assert set(p) == {"se", "me", "tk", "ad", "cs", "ls", "ph", "fm", "hm"}
     assert len(p["hm"]) == 28 and set(p["hm"]) <= set("01234x")
