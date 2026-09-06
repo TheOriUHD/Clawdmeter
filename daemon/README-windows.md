@@ -251,8 +251,12 @@ It prints one line per address this PC has; paste the reachable one into the
 other machine — `curl -fsSL http://<pc>:47393/install/<token> | sh` on
 Linux/macOS, `irm http://<pc>:47393/install.ps1/<token> | iex` on another
 Windows box. The installer comes from the daemon itself with the address and
-token baked in. Windows Defender Firewall asks once whether Python may accept
-incoming connections — allow it on private networks, or the join fails.
+token baked in; the other machine needs nothing else (no daemon there). It
+pings this PC when done, and the daemon log then shows `<host> joined`, later
+`first hook from <host>`; a hook arriving without the token is logged as
+`rejected a hook from <host>`. Windows Defender Firewall asks once whether
+Python may accept incoming connections — allow it on private networks, or the
+join fails.
 
 Config keys (`%LOCALAPPDATA%\Clawdmeter\config`): `companion = on|off`,
 `companion_port = 47393`, `companion_bind = 0.0.0.0` (`127.0.0.1` for this PC

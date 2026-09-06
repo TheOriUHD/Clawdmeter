@@ -575,13 +575,16 @@ HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", 
 
 
 def hook_command(url: str = DEFAULT_URL, token: str | None = None) -> str:
-    """The curl line. CLAWDMETER_URL in the environment overrides the baked-in bridge URL."""
+    """The curl line. CLAWDMETER_URL in the environment overrides the baked-in
+    bridge URL and CLAWDMETER_TOKEN adds the bridge token to the path — so the
+    plugin's token-free line can still reach a bridge on another machine."""
     url = url.rstrip("/")
     auth = f" -H 'X-Clawdmeter-Token: {token}'" if token else ""
     return ("curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' "
             "-H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" "
             "-H \"X-Clawdmeter-Pid: $PPID\"" + auth +
-            " --data-binary @- \"${CLAWDMETER_URL:-" + url + "}/hook\" >/dev/null 2>&1 || true")
+            " --data-binary @- \"${CLAWDMETER_URL:-" + url + "}/hook${CLAWDMETER_TOKEN:+/$CLAWDMETER_TOKEN}\""
+            " >/dev/null 2>&1 || true")
 
 
 def hooks_fragment(url: str = DEFAULT_URL, token: str | None = None) -> dict:
@@ -686,9 +689,20 @@ fi
 if [ "$1" = "--uninstall" ]; then
     echo "Clawdmeter companion hooks removed from $SETTINGS"
 else
-    command -v curl >/dev/null 2>&1 || echo "warning: curl not found — the hooks need it" >&2
     echo "Clawdmeter companion hooks installed in $SETTINGS"
-    echo "New Claude Code sessions on this machine report to {base_url}"
+    echo "Claude Code sessions on this machine report to {base_url} (running ones from their next event)."
+    if command -v curl >/dev/null 2>&1; then
+        code=$(curl -s -m 4 -o /dev/null -w '%{{http_code}}' -X POST -H 'Content-Type: application/json' \
+            -H "X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)" -H 'X-Clawdmeter-Token: {token}' \
+            --data '{{"hook_event_name":"ClawdmeterJoin"}}' "{base_url}/hook" 2>/dev/null || echo 000)
+        if [ "$code" = "200" ]; then
+            echo "The bridge answered — this machine now shows in its log as joined."
+        else
+            echo "warning: the bridge at {base_url} did not answer (HTTP $code) — the hooks are in place, but this machine cannot reach it right now" >&2
+        fi
+    else
+        echo "warning: curl not found — the hooks need it" >&2
+    fi
 fi
 """
 
@@ -733,7 +747,15 @@ foreach ($ev in $frag.hooks.PSObject.Properties.Name) {{
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $settings | ConvertTo-Json -Depth 12 | Set-Content -Path $path -Encoding UTF8
 Write-Host "Clawdmeter companion hooks installed in $path"
-Write-Host "New Claude Code sessions on this machine report to {base_url}"
+Write-Host "Claude Code sessions on this machine report to {base_url} (running ones from their next event)."
+try {{
+    $hdr = @{{ 'X-Clawdmeter-Host' = $env:COMPUTERNAME; 'X-Clawdmeter-Token' = '{token}' }}
+    Invoke-WebRequest -Uri '{base_url}/hook' -Method Post -ContentType 'application/json' -Headers $hdr `
+        -Body '{{"hook_event_name":"ClawdmeterJoin"}}' -TimeoutSec 4 -UseBasicParsing | Out-Null
+    Write-Host "The bridge answered - this machine now shows in its log as joined."
+}} catch {{
+    Write-Warning "The bridge at {base_url} did not answer: $($_.Exception.Message)"
+}}
 """
 
 
@@ -783,17 +805,46 @@ def local_addresses() -> list[str]:
             add(info[4][0])
     except OSError:
         pass
-    if shutil.which("tailscale"):
+    ts = shutil.which("tailscale") or next((c for c in ("/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+                                                        "/usr/bin/tailscale", "/usr/local/bin/tailscale")
+                                            if os.path.exists(c)), None)
+    if ts:
         try:
-            r = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3)
+            r = subprocess.run([ts, "ip", "-4"], capture_output=True, text=True, timeout=3)
             for line in r.stdout.splitlines():
                 add(line.strip())
         except (OSError, subprocess.SubprocessError):
             pass
+    for a in interface_ipv4s():          # Tailscale-range addresses even without its CLI
+        if is_cgnat(a):
+            add(a)
     host = hostname_short()
     if host:
         add(f"{host}.local")
     return out
+
+
+def interface_ipv4s() -> list[str]:
+    """Every IPv4 on every interface (ifconfig or `ip`), [] when neither tool exists."""
+    for cmd in (["ifconfig"], ["ip", "-o", "-4", "addr"]):
+        exe = shutil.which(cmd[0]) or next((c for c in (f"/sbin/{cmd[0]}", f"/usr/sbin/{cmd[0]}", f"/bin/{cmd[0]}")
+                                            if os.path.exists(c)), None)
+        if not exe:
+            continue
+        try:
+            text = subprocess.run([exe] + cmd[1:], capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        found = re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", text)
+        if found:
+            return found
+    return []
+
+
+def is_cgnat(addr: str) -> bool:
+    """100.64.0.0/10 — the range Tailscale hands out."""
+    parts = addr.split(".")
+    return len(parts) == 4 and parts[0] == "100" and parts[1].isdigit() and 64 <= int(parts[1]) <= 127
 
 
 def join_text(port: int, token: str, addresses: list[str] | None = None) -> str:
@@ -808,9 +859,16 @@ def join_text(port: int, token: str, addresses: list[str] | None = None) -> str:
     lines += ["", "Windows (PowerShell):", ""]
     for a in addrs[:1]:
         lines.append(f"  irm http://{a}:{port}/install.ps1/{token} | iex")
-    lines += ["", f"Check from there:  curl -s http://<bridge>:{port}/state/{token}",
+    lines += ["",
+              "That is all the other machine needs: only the hooks go there, no daemon and no Bluetooth.",
+              "It prints whether the bridge answered; this daemon's log then says `<host> joined`,",
+              "and `first hook from <host>` once Claude Code there fires its first event.",
+              "",
+              f"Check from there:  curl -s http://<bridge>:{port}/state/{token}",
               "Remove later:      ... /install/<token> | sh -s -- --uninstall",
-              "The token lives next to the daemon config (companion.token); anything not from this machine must present it."]
+              "The token lives next to the daemon config (companion.token); anything not from this machine must present it.",
+              f"Hooks installed another way (the plugin, install-hooks.py) can point here with",
+              f"CLAWDMETER_URL=http://<bridge>:{port} and CLAWDMETER_TOKEN={token} in that Claude Code's environment."]
     return "\n".join(lines)
 
 
@@ -875,6 +933,18 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
             return True
         return headers.get(TOKEN_HEADER, "") == token or path_token == token
 
+    rejected_at: dict[str, float] = {}      # peer address → when we last logged a rejection
+    seen_hosts: set[str] = set()            # other machines whose hooks have arrived
+
+    def note_rejected(headers: dict, remote: str) -> None:
+        now = time.time()
+        if now - rejected_at.get(remote, 0.0) < 600:
+            return
+        rejected_at[remote] = now
+        who = headers.get("x-clawdmeter-host", "") or remote
+        log(f"Companion: rejected a hook from {who} ({remote}): token missing or wrong. "
+            "Run `companion link` here and paste its line on that machine (it carries the token).")
+
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             method, path, headers, body = await _read_request(reader)
@@ -887,6 +957,7 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
             arg = parts[1] if len(parts) > 1 else None
             if method == "POST" and route in ("hook", "event", ""):
                 if not authed(headers, remote, arg):
+                    note_rejected(headers, remote)
                     writer.write(_response(401, "token required (see: companion link)"))
                     return
                 try:
@@ -905,7 +976,16 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
                         pid = int(headers.get("x-clawdmeter-pid", "0") or 0)
                     except ValueError:
                         pid = 0
-                changed = companion.ingest(ev, host=hdr_host or remote, pid=pid)
+                who = hdr_host or remote
+                if isinstance(ev, dict) and ev.get("hook_event_name") == "ClawdmeterJoin":
+                    # The served installer's hello: nothing to ingest, everything to log.
+                    log(f"Companion: {who or 'this machine'} joined — its Claude Code hooks report here now")
+                    writer.write(_response(200, "ok"))
+                    return
+                if who and who not in seen_hosts:
+                    seen_hosts.add(who)
+                    log(f"Companion: first hook from {who}" + (f" ({remote})" if remote and hdr_host else ""))
+                changed = companion.ingest(ev, host=who, pid=pid)
                 writer.write(_response(200, "ok"))
                 if changed:
                     on_change()          # the beat's log line says what changed
