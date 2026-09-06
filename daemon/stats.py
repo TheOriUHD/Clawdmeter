@@ -22,7 +22,7 @@ import re
 import time
 from pathlib import Path
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2      # bumped when the parse changes: the whole corpus is rescanned
 HEAT_WEEKS = 24
 MAX_LINE_SCAN = 4 * 1024 * 1024      # a line longer than this is skipped, not parsed
 
@@ -132,7 +132,10 @@ class ClaudeStats:
         for line in data.split(b"\n"):
             if not line or len(line) > MAX_LINE_SCAN:
                 continue
-            m = _TYPE_RE.search(line, 0, 400)      # top-level "type" sits near the start of the line
+            # The top-level "type" may sit after a huge "message" object (assistant
+            # lines), so search the whole line: nested content blocks are
+            # "text"/"tool_use"/"tool_result" and an escaped \"type\" never matches.
+            m = _TYPE_RE.search(line)
             if not m:
                 continue
             kind = m.group(1)
