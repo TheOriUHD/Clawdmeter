@@ -233,9 +233,16 @@ the bridge from then on (running ones from their next event) and the device
 treats them like local ones. `... | sh -s -- --uninstall` removes them.
 Check from the worker with `curl -s http://<bridge>:47393/state/<token>`.
 
+**Run the line as the user Claude Code runs as.** Hooks live in that user's
+`~/.claude/settings.json`; a remote session that logs in as `root` needs the
+join line run as root (`sudo -i`, then paste it), not as your everyday user.
+The installer prints which user it installed for, and the daemon log repeats
+it in the `joined` line.
+
 If nothing shows up, the daemon's log says why: a hook that arrives without
 the right token is logged as `rejected a hook from <host>` (once per ten
-minutes per machine). Hooks installed another way — the plugin from the
+minutes per machine), and a machine that joined but sent no hook within ten
+minutes gets a reminder naming the user its hooks were installed for. Hooks installed another way — the plugin from the
 marketplace, `install-hooks.py` without `--url`/`--token` — post to that
 machine's own loopback, where nothing listens; point them at the bridge with
 `CLAWDMETER_URL=http://<bridge>:47393` and `CLAWDMETER_TOKEN=<token>` in that

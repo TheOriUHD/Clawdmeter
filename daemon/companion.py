@@ -64,6 +64,7 @@ DONE_TO_IDLE_S = 60         # "your turn" fades to the calm green Ready after a 
 ACTIVE_STALE_S = 30 * 60    # a working state with no events this long: the Stop hook was missed
 IDLE_STALE_S = 12 * 3600    # an idle session we cannot watch (another machine) is dropped after this
 STATE_VERSION = 1           # companion-state.json format
+JOIN_REMINDER_S = 600       # a machine joined but no hook came: say so after this long
 # Executable names that can be Claude Code (the desktop app's bundle, the native
 # CLI, an npm install). A hook's parent that is none of these — a wrapper shell,
 # a reused PID — is not worth watching.
@@ -689,11 +690,14 @@ fi
 if [ "$1" = "--uninstall" ]; then
     echo "Clawdmeter companion hooks removed from $SETTINGS"
 else
-    echo "Clawdmeter companion hooks installed in $SETTINGS"
+    ME="$(id -un 2>/dev/null || whoami 2>/dev/null || echo "${{USER:-${{LOGNAME:-unknown}}}}")"
+    echo "Clawdmeter companion hooks installed in $SETTINGS (user $ME)."
     echo "Claude Code sessions on this machine report to {base_url} (running ones from their next event)."
+    echo "Only Claude Code running as $ME sees them: if it connects as another user (root, say), run this line as that user."
     if command -v curl >/dev/null 2>&1; then
         code=$(curl -s -m 4 -o /dev/null -w '%{{http_code}}' -X POST -H 'Content-Type: application/json' \
-            -H "X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)" -H 'X-Clawdmeter-Token: {token}' \
+            -H "X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)" -H "X-Clawdmeter-User: $ME" \
+            -H 'X-Clawdmeter-Token: {token}' \
             --data '{{"hook_event_name":"ClawdmeterJoin"}}' "{base_url}/hook" 2>/dev/null || echo 000)
         if [ "$code" = "200" ]; then
             echo "The bridge answered — this machine now shows in its log as joined."
@@ -746,10 +750,11 @@ foreach ($ev in $frag.hooks.PSObject.Properties.Name) {{
 }}
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $settings | ConvertTo-Json -Depth 12 | Set-Content -Path $path -Encoding UTF8
-Write-Host "Clawdmeter companion hooks installed in $path"
+Write-Host "Clawdmeter companion hooks installed in $path (user $env:USERNAME)."
 Write-Host "Claude Code sessions on this machine report to {base_url} (running ones from their next event)."
+Write-Host "Only Claude Code running as $env:USERNAME sees them; run this line as the user it runs as."
 try {{
-    $hdr = @{{ 'X-Clawdmeter-Host' = $env:COMPUTERNAME; 'X-Clawdmeter-Token' = '{token}' }}
+    $hdr = @{{ 'X-Clawdmeter-Host' = $env:COMPUTERNAME; 'X-Clawdmeter-User' = $env:USERNAME; 'X-Clawdmeter-Token' = '{token}' }}
     Invoke-WebRequest -Uri '{base_url}/hook' -Method Post -ContentType 'application/json' -Headers $hdr `
         -Body '{{"hook_event_name":"ClawdmeterJoin"}}' -TimeoutSec 4 -UseBasicParsing | Out-Null
     Write-Host "The bridge answered - this machine now shows in its log as joined."
@@ -935,6 +940,19 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
 
     rejected_at: dict[str, float] = {}      # peer address → when we last logged a rejection
     seen_hosts: set[str] = set()            # other machines whose hooks have arrived
+    pending_joins: dict[str, tuple[float, str]] = {}   # host → (joined at, user) until its first hook
+
+    def check_joins() -> None:
+        """A machine ran the installer but no hook ever came — the usual reason
+        is that Claude Code there runs as a different user (root over SSH)."""
+        now = time.time()
+        for host, (at, user) in list(pending_joins.items()):
+            if now - at >= JOIN_REMINDER_S:
+                del pending_joins[host]
+                log(f"Companion: {host} joined {int(round((now - at) / 60))} min ago but no hook has arrived from it. "
+                    f"Its hooks are installed for user {user or '?'} — Claude Code there must run as that user "
+                    f"(a remote session logged in as root needs the join line run as root), and a session that "
+                    f"was already open picks the hooks up at its next event or restart.")
 
     def note_rejected(headers: dict, remote: str) -> None:
         now = time.time()
@@ -977,14 +995,21 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
                     except ValueError:
                         pid = 0
                 who = hdr_host or remote
+                where = f" ({remote})" if remote and hdr_host else ""
                 if isinstance(ev, dict) and ev.get("hook_event_name") == "ClawdmeterJoin":
                     # The served installer's hello: nothing to ingest, everything to log.
-                    log(f"Companion: {who or 'this machine'} joined — its Claude Code hooks report here now")
+                    user = headers.get("x-clawdmeter-user", "")
+                    log(f"Companion: {who or 'this machine'}{where} joined — hooks installed"
+                        + (f" for user {user}" if user else "") + "; its Claude Code reports here from its next event")
+                    if who:
+                        pending_joins[who] = (time.time(), user)
+                        asyncio.get_running_loop().call_later(JOIN_REMINDER_S + 1, check_joins)
                     writer.write(_response(200, "ok"))
                     return
                 if who and who not in seen_hosts:
                     seen_hosts.add(who)
-                    log(f"Companion: first hook from {who}" + (f" ({remote})" if remote and hdr_host else ""))
+                    pending_joins.pop(who, None)
+                    log(f"Companion: first hook from {who}{where}")
                 changed = companion.ingest(ev, host=who, pid=pid)
                 writer.write(_response(200, "ok"))
                 if changed:
