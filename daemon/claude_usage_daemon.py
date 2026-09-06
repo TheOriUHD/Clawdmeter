@@ -526,11 +526,46 @@ _wake: "asyncio.Event | None" = None    # wakes the connected loop early (refres
 _cc_dirty = False
 
 
+STATE_FILE = CONFIG_FILE.parent / "companion-state.json"   # the session table, across restarts
+_state_save_handle: "asyncio.TimerHandle | None" = None
+
+
+def _schedule_state_save(delay: float = 1.0) -> None:
+    """Persist the companion's session table shortly after it changed (bursts of
+    hook events coalesce into one write). Skipped under the test guard."""
+    global _state_save_handle
+    if os.environ.get("CLAWDMETER_NO_LISTENER") or _state_save_handle is not None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    def _write() -> None:
+        global _state_save_handle
+        _state_save_handle = None
+        try:
+            COMPANION.save(STATE_FILE)
+        except OSError as e:
+            log(f"Companion: could not save {STATE_FILE}: {e}")
+
+    _state_save_handle = loop.call_later(delay, _write)
+
+
+def _restore_companion_state() -> None:
+    if os.environ.get("CLAWDMETER_NO_LISTENER"):
+        return
+    n = COMPANION.load(STATE_FILE)
+    if n:
+        log(f"Companion: restored {n} session(s) from the last run — {COMPANION.describe()}")
+
+
 def _companion_changed() -> None:
     global _cc_dirty
     _cc_dirty = True
     if _wake is not None:
         _wake.set()
+    _schedule_state_save()
 
 
 def add_companion_fields(payload: dict) -> None:
@@ -1348,6 +1383,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
             # right away, coalescing bursts into one write.
             if COMPANION.expire():
                 _cc_dirty = True
+                _schedule_state_save()
             if _cc_dirty and read_companion_setting() == "on" and now - last_cc_push >= COMPANION_PUSH_MIN_S:
                 _cc_dirty = False
                 last_cc_push = now
@@ -1407,6 +1443,8 @@ async def main() -> None:
                                       exclude_substrings=(CONFIG_FILE.parent.name,), log=log)
         stats_task = asyncio.create_task(stats_loop())
     cc_server = None
+    COMPANION.log = log
+    _restore_companion_state()
     if os.environ.get("CLAWDMETER_NO_LISTENER"):
         log("Companion listener off (CLAWDMETER_NO_LISTENER)")
     elif read_companion_setting() == "on":
@@ -1457,6 +1495,11 @@ async def main() -> None:
         cc_server.close()
     if stats_task is not None:
         stats_task.cancel()
+    if not os.environ.get("CLAWDMETER_NO_LISTENER"):
+        try:
+            COMPANION.save(STATE_FILE)
+        except OSError as e:
+            log(f"Companion: could not save {STATE_FILE}: {e}")
 
 
 if __name__ == "__main__":

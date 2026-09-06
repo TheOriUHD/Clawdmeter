@@ -36,12 +36,15 @@ elapsed seconds).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,8 +61,13 @@ WORKING_STATES = (CC_THINKING, CC_TOOL, CC_COMPACTING)
 
 LONG_TURN_S = 20.0          # a turn at least this long ends in CC_TURN_DONE (nudge) rather than CC_DONE
 DONE_TO_IDLE_S = 60         # "your turn" fades to the calm green Ready after a minute
-ACTIVE_STALE_S = 30 * 60    # an active state with no events this long is presumed dead
-IDLE_STALE_S = 6 * 3600     # an idle session with no events this long is dropped
+ACTIVE_STALE_S = 30 * 60    # a working state with no events this long: the Stop hook was missed
+IDLE_STALE_S = 12 * 3600    # an idle session we cannot watch (another machine) is dropped after this
+STATE_VERSION = 1           # companion-state.json format
+# Executable names that can be Claude Code (the desktop app's bundle, the native
+# CLI, an npm install). A hook's parent that is none of these — a wrapper shell,
+# a reused PID — is not worth watching.
+CLAUDE_PROCESS_HINTS = ("claude", "node", "bun")
 LABEL_MAX = 24
 PROJECT_MAX = 16
 MODEL_MAX = 12
@@ -136,6 +144,119 @@ def tool_label(tool_name: str, tool_input) -> str:
     return _short(f"Using {name}", LABEL_MAX)
 
 
+# ---- Process liveness ------------------------------------------------------------
+#
+# Hooks on the bridge's own machine send their parent PID (X-Clawdmeter-Pid:
+# $PPID) — Claude Code runs each hook straight from its own process, so that is
+# the session's process. Watching it means a session stays "Ready" for as long
+# as that Claude Code is open, whether you type for an hour or sleep on it, and
+# vanishes the moment the window closes even if no SessionEnd hook ever came.
+
+def pid_alive(pid: int) -> bool:
+    """Does a process with this id exist? Never signals it (os.kill on Windows
+    would *terminate* the target — hence the ctypes path)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenProcess.restype = ctypes.c_void_p
+            handle = k32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return ctypes.get_last_error() == 5             # ERROR_ACCESS_DENIED: exists, not ours
+            try:
+                code = ctypes.c_ulong()
+                if not k32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code)):
+                    return True
+                return code.value == 259                        # STILL_ACTIVE
+            finally:
+                k32.CloseHandle(ctypes.c_void_p(handle))
+        except Exception:  # noqa: BLE001 - liveness is best effort; unknown counts as alive
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def process_name(pid: int) -> str | None:
+    """The executable's base name, or None when it cannot be determined."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenProcess.restype = ctypes.c_void_p
+            handle = k32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                buf = ctypes.create_unicode_buffer(1024)
+                size = ctypes.c_ulong(len(buf))
+                if not k32.QueryFullProcessImageNameW(ctypes.c_void_p(handle), 0, buf, ctypes.byref(size)):
+                    return None
+                return os.path.basename(buf.value) or None
+            finally:
+                k32.CloseHandle(ctypes.c_void_p(handle))
+        if sys.platform.startswith("linux"):
+            try:
+                return os.path.basename(os.readlink(f"/proc/{pid}/exe")) or None
+            except OSError:
+                with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as f:
+                    return f.read().strip() or None
+        out = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=3)
+        name = out.stdout.strip().splitlines()
+        return os.path.basename(name[0].strip()) if name else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def watchable_pid(pid: int) -> bool:
+    """A local PID worth watching: alive and, when we can tell, a Claude Code process."""
+    if not pid_alive(pid):
+        return False
+    name = process_name(pid)
+    return name is None or any(h in name.lower() for h in CLAUDE_PROCESS_HINTS)
+
+
+def boot_time() -> float | None:
+    """When this machine booted (epoch seconds), or None. PIDs saved before a
+    reboot mean nothing after it."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=3).stdout
+            m = re.search(r"sec\s*=\s*(\d+)", out)
+            return float(m.group(1)) if m else None
+        if sys.platform.startswith("linux"):
+            with open("/proc/stat", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("btime "):
+                        return float(line.split()[1])
+            return None
+        if sys.platform == "win32":
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetTickCount64.restype = ctypes.c_ulonglong
+            return time.time() - k32.GetTickCount64() / 1000.0
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def same_boot(saved: object, tolerance_s: float = 300.0) -> bool:
+    if not isinstance(saved, (int, float)):
+        return False
+    now_boot = boot_time()
+    return now_boot is not None and abs(now_boot - float(saved)) <= tolerance_s
+
+
 @dataclass
 class SessionState:
     sid: str
@@ -150,6 +271,8 @@ class SessionState:
     agents: int = 0
     tools: int = 0
     pending_permission: str = ""   # tool waiting for a permission decision
+    pid: int = 0                # the session's Claude Code process (this machine only)
+    watched: bool = False       # pid verified alive and Claude-like → liveness, not timers, ends it
 
     def set_state(self, state: int, label: str, now: float) -> None:
         if state != self.state or label != self.label:
@@ -165,10 +288,15 @@ class Companion:
         self.sessions: dict[str, SessionState] = {}
         self.enabled = False       # listener up → send "cc" even with no sessions
         self._last_signature: tuple | None = None
+        self.log = None            # optional logger for the rare, interesting lines
 
     # ---- ingest --------------------------------------------------------------
-    def ingest(self, ev: dict, now: float | None = None, host: str = "") -> bool:
-        """Apply one hook event. Returns True when the device-visible summary changed."""
+    def ingest(self, ev: dict, now: float | None = None, host: str = "", pid: int = 0) -> bool:
+        """Apply one hook event. Returns True when the device-visible summary changed.
+
+        ``pid`` is the hook's parent process on *this* machine (0 = unknown or
+        another machine); a live Claude-like process is watched from then on.
+        """
         if not isinstance(ev, dict):
             return False
         now = time.time() if now is None else now
@@ -191,6 +319,13 @@ class Companion:
         s.last_event = now
         if host:
             s.host = host
+        if pid and pid != s.pid:
+            s.pid = pid
+            s.watched = watchable_pid(pid)
+            if self.log:
+                self.log(f"Companion: session {sid[:8]} is pid {pid}"
+                         + (f" ({process_name(pid) or 'process'}) — watching it" if s.watched
+                            else " — not a Claude Code process, using timers"))
         cwd = ev.get("cwd")
         if isinstance(cwd, str) and cwd:
             s.project = _short(_basename(cwd), PROJECT_MAX)
@@ -269,17 +404,87 @@ class Companion:
 
     # ---- housekeeping --------------------------------------------------------
     def expire(self, now: float | None = None) -> bool:
+        """Time and liveness housekeeping; True when the device-visible summary changed.
+
+        A watched session (its process is on this machine) lives exactly as long
+        as the process: no idle timeout, gone the tick it exits. A working state
+        with no events for ACTIVE_STALE_S means a missed Stop hook → Ready. An
+        unwatched session (another machine) falls back to the timers.
+        """
         now = time.time() if now is None else now
         changed = False
         for sid, s in list(self.sessions.items()):
             age = now - s.last_event
             if s.state in (CC_DONE, CC_TURN_DONE) and now - s.since >= DONE_TO_IDLE_S:
                 s.set_state(CC_IDLE, "Ready", now)
+            if s.watched:
+                if not pid_alive(s.pid):
+                    if self.log:
+                        self.log(f"Companion: session {sid[:8]} ended (pid {s.pid} gone)")
+                    del self.sessions[sid]
+                    changed = True
+                elif s.state in WORKING_STATES + (CC_ERROR,) and age >= ACTIVE_STALE_S:
+                    s.set_state(CC_IDLE, "Ready", now)
+                continue
             stale = IDLE_STALE_S if s.state in (CC_IDLE, CC_DONE, CC_TURN_DONE) else ACTIVE_STALE_S
             if age >= stale:
                 del self.sessions[sid]
                 changed = True
         return self._changed() or changed
+
+    # ---- persistence -----------------------------------------------------------
+    # The table survives a daemon restart (a deploy, a reboot of the bridge): the
+    # sessions come back and are re-checked against their processes, so the
+    # display never drops to "Idle" only because the bridge was restarted.
+    def to_dict(self) -> dict:
+        return {"v": STATE_VERSION, "boot": boot_time(), "saved": time.time(),
+                "sessions": [dataclasses.asdict(s) for s in self.sessions.values()]}
+
+    def save(self, path: Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(self.to_dict(), separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def load(self, path: Path, now: float | None = None) -> int:
+        """Restore a saved table (never raises). Returns the number of sessions kept."""
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0
+        if not isinstance(data, dict) or data.get("v") != STATE_VERSION:
+            return 0
+        now = time.time() if now is None else now
+        boot_ok = same_boot(data.get("boot"))
+        fields = {f.name: f.type for f in dataclasses.fields(SessionState)}
+        kept = 0
+        for raw in data.get("sessions") or []:
+            if not isinstance(raw, dict) or not isinstance(raw.get("sid"), str) or not raw["sid"]:
+                continue
+            s = SessionState(sid=raw["sid"])
+            for k, v in raw.items():
+                if k == "sid" or k not in fields:
+                    continue
+                cur = getattr(s, k)
+                try:
+                    if isinstance(cur, bool):
+                        v = bool(v)
+                    elif isinstance(cur, int):
+                        v = int(v)
+                    elif isinstance(cur, float):
+                        v = float(v)
+                    elif isinstance(cur, str):
+                        v = str(v)
+                except (TypeError, ValueError):
+                    continue
+                setattr(s, k, v)
+            if s.watched and not (boot_ok and watchable_pid(s.pid)):
+                continue                     # its process is gone (or PIDs mean nothing after a reboot)
+            self.sessions[s.sid] = s
+            kept += 1
+        self.expire(now)
+        return len(self.sessions)
 
     # ---- device view -----------------------------------------------------------
     @staticmethod
@@ -357,7 +562,8 @@ def hook_command(url: str = DEFAULT_URL, token: str | None = None) -> str:
     url = url.rstrip("/")
     auth = f" -H 'X-Clawdmeter-Token: {token}'" if token else ""
     return ("curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' "
-            "-H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\"" + auth +
+            "-H \"X-Clawdmeter-Host: $(hostname -s 2>/dev/null || hostname)\" "
+            "-H \"X-Clawdmeter-Pid: $PPID\"" + auth +
             " --data-binary @- \"${CLAWDMETER_URL:-" + url + "}/hook\" >/dev/null 2>&1 || true")
 
 
@@ -674,7 +880,15 @@ async def start_companion_server(companion: Companion, on_change, host: str = CO
                 hdr_host = headers.get("x-clawdmeter-host", "").split(".", 1)[0]
                 if hdr_host.lower() == LOCAL_HOST.lower():
                     hdr_host = ""            # our own machine is not "remote"
-                changed = companion.ingest(ev, host=hdr_host or remote)
+                # The hook's parent PID is only meaningful for this machine's own
+                # sessions: loopback, and not a tunnelled or containerised host.
+                pid = 0
+                if not remote and not hdr_host:
+                    try:
+                        pid = int(headers.get("x-clawdmeter-pid", "0") or 0)
+                    except ValueError:
+                        pid = 0
+                changed = companion.ingest(ev, host=hdr_host or remote, pid=pid)
                 writer.write(_response(200, "ok"))
                 if changed:
                     on_change()          # the beat's log line says what changed
