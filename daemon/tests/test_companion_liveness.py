@@ -55,7 +55,16 @@ def test_pid_alive_and_process_name_on_real_processes():
     child.wait()
     assert not cc.pid_alive(child.pid) and not cc.watchable_pid(child.pid)
     assert not cc.pid_alive(0) and not cc.pid_alive(-1) and not cc.pid_alive("7")
-    assert cc.boot_time() is None or cc.same_boot(cc.boot_time())
+    boot = cc.boot_time()
+    if sys.platform in ("darwin", "win32") or sys.platform.startswith("linux"):
+        assert boot is not None and 0 < boot <= time.time() and cc.same_boot(boot)
+    # Even with a bare PATH (launchd) the boot time must still be found.
+    with_path = os.environ.get("PATH", "")
+    try:
+        os.environ["PATH"] = "/nonexistent"
+        assert cc.boot_time() == boot
+    finally:
+        os.environ["PATH"] = with_path
     assert not cc.same_boot(None) and not cc.same_boot(12.0)
 
 
