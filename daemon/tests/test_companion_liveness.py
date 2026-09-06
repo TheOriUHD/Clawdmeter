@@ -236,3 +236,24 @@ def test_daemons_save_and_restore_the_table(tmp_path, monkeypatch):
             assert mod.COMPANION.summary()["n"] == 1 and mod.COMPANION.summary()["h"] == "devbox"
 
         asyncio.run(run())
+
+
+def test_equally_busy_sessions_take_turns():
+    c = cc.Companion()
+    c.enabled = True
+    c.ingest(ev("PreToolUse", sid="a", tool_name="Bash", tool_input={"command": "pio run"}), now=0)
+    c.ingest(ev("PreToolUse", sid="b", tool_name="Read", tool_input={"file_path": "/x/ui.cpp"}), now=1, host="gpuserverph")
+    seen = {c.headline(now=t).sid for t in range(0, 4 * cc.HEADLINE_ROTATE_S)}
+    assert seen == {"a", "b"}
+    # Stable within a slot, and the slot boundary is the rotation period.
+    assert c.headline(now=0.0).sid == c.headline(now=cc.HEADLINE_ROTATE_S - 0.01).sid
+    assert c.headline(now=0.0).sid != c.headline(now=cc.HEADLINE_ROTATE_S).sid
+    assert "gpuserverph" in (c.summary(now=cc.HEADLINE_ROTATE_S).get("h"), c.summary(now=0).get("h"))
+    # A more urgent session wins outright, no rotation.
+    c.ingest(ev("PermissionRequest", sid="a", tool_name="Bash"), now=2)
+    assert all(c.headline(now=t).sid == "a" for t in range(0, 3 * cc.HEADLINE_ROTATE_S))
+    # expire() notices the rotation (it re-evaluates the signature every tick) so a beat goes out.
+    c.ingest(ev("PermissionDenied", sid="a"), now=3)        # back to thinking: equal ranks again
+    c.summary(now=0)
+    flips = sum(1 for t in range(0, 4 * cc.HEADLINE_ROTATE_S) if c.expire(now=t))
+    assert flips >= 3

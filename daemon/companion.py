@@ -65,6 +65,7 @@ ACTIVE_STALE_S = 30 * 60    # a working state with no events this long: the Stop
 IDLE_STALE_S = 12 * 3600    # an idle session we cannot watch (another machine) is dropped after this
 STATE_VERSION = 1           # companion-state.json format
 JOIN_REMINDER_S = 600       # a machine joined but no hook came: say so after this long
+HEADLINE_ROTATE_S = 8       # equally busy sessions take turns on the device this often
 # Executable names that can be Claude Code (the desktop app's bundle, the native
 # CLI, an npm install). A hook's parent that is none of these — a wrapper shell,
 # a reused PID — is not worth watching.
@@ -328,7 +329,7 @@ class Companion:
 
         if name == "SessionEnd":
             self.sessions.pop(sid, None)
-            return self._changed()
+            return self._changed(now)
 
         s = self.sessions.get(sid)
         if s is None:
@@ -418,7 +419,7 @@ class Companion:
         elif name == "PostCompact":
             s.set_state(CC_THINKING, "Thinking", now)
         # Anything else (MessageDisplay, ConfigChange, …) only refreshes last_event.
-        return self._changed()
+        return self._changed(now)
 
     # ---- housekeeping --------------------------------------------------------
     def expire(self, now: float | None = None) -> bool:
@@ -448,7 +449,7 @@ class Companion:
             if age >= stale:
                 del self.sessions[sid]
                 changed = True
-        return self._changed() or changed
+        return self._changed(now) or changed
 
     # ---- persistence -----------------------------------------------------------
     # The table survives a daemon restart (a deploy, a reboot of the bridge): the
@@ -506,22 +507,33 @@ class Companion:
 
     # ---- device view -----------------------------------------------------------
     @staticmethod
-    def _priority(s: SessionState) -> tuple:
-        rank = {CC_ATTENTION: 5, CC_TURN_DONE: 4, CC_TOOL: 3, CC_THINKING: 3, CC_COMPACTING: 3,
+    def _rank(s: SessionState) -> int:
+        return {CC_ATTENTION: 5, CC_TURN_DONE: 4, CC_TOOL: 3, CC_THINKING: 3, CC_COMPACTING: 3,
                 CC_ERROR: 2, CC_DONE: 1, CC_IDLE: 0}.get(s.state, 0)
-        return (rank, s.last_event)
 
-    def headline(self) -> SessionState | None:
+    @staticmethod
+    def _priority(s: SessionState) -> tuple:
+        return (Companion._rank(s), s.last_event)
+
+    def headline(self, now: float | None = None) -> SessionState | None:
+        """The most urgent session. Several equally urgent ones (two agents working
+        at once) take turns every HEADLINE_ROTATE_S instead of flipping on every
+        event, so the line stays readable and each machine gets its moment."""
         if not self.sessions:
             return None
-        return max(self.sessions.values(), key=self._priority)
+        top_rank = max(self._rank(s) for s in self.sessions.values())
+        top = sorted((s for s in self.sessions.values() if self._rank(s) == top_rank), key=lambda s: s.sid)
+        if len(top) == 1:
+            return top[0]
+        now = time.time() if now is None else now
+        return top[int(now // HEADLINE_ROTATE_S) % len(top)]
 
     def summary(self, now: float | None = None) -> dict | None:
         """The "cc" object, or None when the companion is off (no listener)."""
         if not self.enabled and not self.sessions:
             return None
         now = time.time() if now is None else now
-        h = self.headline()
+        h = self.headline(now)
         if h is None:
             return {"n": 0, "a": 0, "s": CC_NONE}
         out = {
@@ -541,14 +553,14 @@ class Companion:
             out["h"] = _short(h.host, 12)
         return out
 
-    def signature(self) -> tuple | None:
-        s = self.summary()
+    def signature(self, now: float | None = None) -> tuple | None:
+        s = self.summary(now)
         if s is None:
             return None
         return tuple(sorted((k, v) for k, v in s.items() if k != "e"))
 
-    def _changed(self) -> bool:
-        sig = self.signature()
+    def _changed(self, now: float | None = None) -> bool:
+        sig = self.signature(now)
         if sig != self._last_signature:
             self._last_signature = sig
             return True
