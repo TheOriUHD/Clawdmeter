@@ -226,8 +226,12 @@ launched.
 
 The Windows daemon is a full **bridge**: it listens for Claude Code hook events
 and relays the live state (thinking / running a tool / needs you / done) to the
-device, which turns it into the Working page, the status line and the
-needs-you alert.
+device, which turns it into the status line and the needs-you alert. A
+session on this PC is watched by process id (the hook line sends `$PPID` from
+Git Bash; if that is not a Claude Code process the daemon falls back to
+timers), so the line stays **Ready** as long as the window is open and drops
+when it closes; the session table is kept in `companion-state.json` next to the
+config and restored when the daemon restarts.
 
 **Claude Code on this PC.** Install the hooks once (Python is already required
 for the daemon; Claude Code on Windows runs hooks through Git Bash, which ships
@@ -253,8 +257,8 @@ incoming connections — allow it on private networks, or the join fails.
 Config keys (`%LOCALAPPDATA%\Clawdmeter\config`): `companion = on|off`,
 `companion_port = 47393`, `companion_bind = 0.0.0.0` (`127.0.0.1` for this PC
 only), `companion_token = …` (else generated into `companion.token` next to the
-config), `trend = on|off` (usage history for the device's Trend page, kept in
-`history.json`).
+config), `trend = on|off` (usage history kept in `history.json`; the Trend page
+gave way to the Stats page), `stats = on|off`, `token_keeper = on|off`.
 
 ## What is NOT covered here
 

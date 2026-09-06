@@ -68,10 +68,10 @@ makes the device more functional while keeping its design language intact:
   (`Editing ui.cpp…`, `Bash: pio run…`, `Your turn…`); the whimsical spinner
   words stay for plain thinking — they are Claude Code's own. When a session
   is waiting for you the line turns into a calm green **Ready** with a
-  breathing dot.
+  breathing dot; with no session open anywhere it reads a dim **Idle**.
 - **"Needs you" alerts.** A permission prompt, a question, a plan to approve
-  — or the end of a long turn — wakes the panel, slides to the Working page
-  — wakes the panel, starts a calm orange **glow** breathing along the screen
+  — or the end of a long turn — wakes the panel, starts a calm orange **glow**
+  breathing along the screen
   edge (nested rounded rings that follow the glass's real corner radius, 70 px
   on the 2.16, so nothing is cut off by the bezel), has the corner Clawd
   **jump, wave and point**, and plays a **two-note chime** through the speaker
@@ -225,8 +225,8 @@ The installer is served by the daemon itself with the bridge's address and a
 token baked in, merges 15 hooks into that machine's `~/.claude/settings.json`
 (keeping everything else, idempotent, backup written), and needs only `curl`
 plus `python3` or `node`; the PowerShell one needs nothing. New Claude Code
-sessions on that machine report to the bridge from then on; the Working page
-shows them as `devbox:project`. `... | sh -s -- --uninstall` removes them.
+sessions on that machine report to the bridge from then on and the device
+treats them like local ones. `... | sh -s -- --uninstall` removes them.
 Check from the worker with `curl -s http://<bridge>:47393/state/<token>`.
 
 How it stays safe: the daemon listens on every interface, but anything that is
@@ -235,7 +235,17 @@ not the bridge itself must present the token (generated on first start into
 config to pick your own). Prefer loopback only? `companion_bind = 127.0.0.1`,
 and give ssh hosts `RemoteForward 47393 127.0.0.1:47393` instead.
 
-Two things to know: the *usage numbers* still come from the bridge's own
+A session counts as open for as long as it really is. Hooks on the bridge's
+own machine report their parent process id (Claude Code runs each hook straight
+from its own process), so the daemon watches that process: the line stays
+**Ready** whether you type again in a minute or leave the window open
+overnight, and drops the moment the window closes, SessionEnd or not. Sessions
+on other machines cannot be watched and time out instead (30 min silent while
+working, 12 h idle). The table is saved to `companion-state.json` and restored
+when the daemon restarts, so a deploy or a reboot of the bridge never blanks
+the state. With no session anywhere the line reads a dim **Idle**.
+
+Two more things to know: the *usage numbers* still come from the bridge's own
 Claude Code login — and that stored token lives about eight hours and is only
 renewed by a CLI session, not by the desktop app. So the daemon keeps it fresh
 itself: shortly before expiry (or right after a 401) it runs one tiny

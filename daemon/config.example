@@ -44,8 +44,13 @@ host_battery = on
 # Claude Code companion — live session state on the device. Claude Code hooks
 # post each event (prompt sent, tool running, permission needed, turn done) to
 # the daemon, which forwards a compact state to the device: the status line
-# reads what Claude is actually doing, the Working page slides in, and the
-# device glows and chimes when Claude needs you.
+# reads what Claude is actually doing (a calm green "Ready" while a session
+# waits for you, a dim "Idle" when none is open) and the device glows and
+# chimes when Claude needs you. Sessions on this machine are watched by process
+# id (the hook sends $PPID), so they live exactly as long as their Claude Code
+# window; sessions elsewhere time out (30 min silent while working, 12 h idle).
+# The session table is saved in companion-state.json next to this file and
+# restored when the daemon restarts.
 #
 # The machine running this daemon is the BRIDGE (it has the Bluetooth link).
 # Claude Code can run on the bridge itself or on any other machine that can

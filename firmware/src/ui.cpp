@@ -386,7 +386,12 @@ static lv_obj_t* lbl_anim;      // status line: connection state + whimsical idl
 // "Ready" (a session is open, waiting for you): no spinner, no ellipsis — a
 // calm green line with a breathing green dot in front of it.
 static lv_obj_t* ready_dot = nullptr;
-static bool      ticker_ready = false;          // the ticker currently shows the Ready style
+// The ticker's three styles: whimsical (accent word, spinner glyph, ellipsis —
+// no companion, or a state worth narrating), Ready (green word, breathing green
+// dot: a session is waiting for you) and Idle (dim word, still dim dot: the
+// companion reports and no Claude Code is running anywhere).
+enum TickerMode : uint8_t { TICKER_WHIMSY, TICKER_READY, TICKER_IDLE };
+static TickerMode ticker_mode = TICKER_WHIMSY;
 static int32_t   ready_dot_opa = 255;
 
 // ---- Usage level: two horizontal pages ----
@@ -2387,41 +2392,49 @@ static void ready_dot_anim_exec(void* var, int32_t v) {
     if (ready_dot) lv_obj_set_style_opa(ready_dot, (lv_opa_t)v, 0);
 }
 
-// Switch the ticker between the whimsical style (accent, spinner glyph,
-// ellipsis) and the Ready style (green text, breathing green dot, nothing else).
-static void set_ticker_ready(bool on) {
-    if (on == ticker_ready) return;
-    ticker_ready = on;
+// Switch the ticker's style (see TickerMode). Ready and Idle share the
+// "dot + one word" layout; only Ready breathes.
+static void set_ticker_mode(TickerMode mode) {
+    if (mode == ticker_mode) return;
+    ticker_mode = mode;
     if (!lbl_anim || !ready_dot) return;
-    if (on) {
-        lv_obj_set_style_text_color(lbl_anim, COL_GREEN, 0);
-        lv_label_set_text(lbl_anim, "Ready");
-        // Place the dot just left of the centred word.
-        lv_point_t sz;
-        lv_text_get_size(&sz, "Ready", L.anim_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        const int dot_w = lv_obj_get_width(ready_dot);
-        const int gap = dot_w;
-        lv_obj_update_layout(lbl_anim);
-        const int cx = lv_obj_get_x(lbl_anim) + lv_obj_get_width(lbl_anim) / 2;
-        const int cy = lv_obj_get_y(lbl_anim) + lv_obj_get_height(lbl_anim) / 2;
-        lv_obj_set_pos(ready_dot, cx - sz.x / 2 - gap - dot_w, cy - dot_w / 2);
-        lv_obj_clear_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
-        lv_anim_delete(&ready_dot_opa, ready_dot_anim_exec);
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, &ready_dot_opa);
-        lv_anim_set_values(&a, 255, 70);
-        lv_anim_set_duration(&a, 1400);
-        lv_anim_set_playback_duration(&a, 1400);
-        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-        lv_anim_set_exec_cb(&a, ready_dot_anim_exec);
-        lv_anim_start(&a);
-    } else {
-        lv_anim_delete(&ready_dot_opa, ready_dot_anim_exec);
+    lv_anim_delete(&ready_dot_opa, ready_dot_anim_exec);
+    if (mode == TICKER_WHIMSY) {
         lv_obj_add_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(lbl_anim, COL_ACCENT, 0);
+        return;
     }
+    const bool ready = (mode == TICKER_READY);
+    const char* word = ready ? "Ready" : "Idle";
+    const lv_color_t col = ready ? COL_GREEN : COL_DIM;
+    lv_obj_set_style_text_color(lbl_anim, col, 0);
+    lv_obj_set_style_bg_color(ready_dot, col, 0);
+    lv_label_set_text(lbl_anim, word);
+    // Place the dot just left of the centred word.
+    lv_point_t sz;
+    lv_text_get_size(&sz, word, L.anim_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int dot_w = lv_obj_get_width(ready_dot);
+    const int gap = dot_w;
+    lv_obj_update_layout(lbl_anim);
+    const int cx = lv_obj_get_x(lbl_anim) + lv_obj_get_width(lbl_anim) / 2;
+    const int cy = lv_obj_get_y(lbl_anim) + lv_obj_get_height(lbl_anim) / 2;
+    lv_obj_set_pos(ready_dot, cx - sz.x / 2 - gap - dot_w, cy - dot_w / 2);
+    lv_obj_clear_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
+    if (!ready) {                                   // Idle: a still, dim dot
+        ready_dot_opa = 255;
+        lv_obj_set_style_opa(ready_dot, LV_OPA_COVER, 0);
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &ready_dot_opa);
+    lv_anim_set_values(&a, 255, 70);
+    lv_anim_set_duration(&a, 1400);
+    lv_anim_set_playback_duration(&a, 1400);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_exec_cb(&a, ready_dot_anim_exec);
+    lv_anim_start(&a);
 }
 
 void ui_tick_anim(void) {
@@ -2488,11 +2501,23 @@ void ui_tick_anim(void) {
         anim_msg_start = now;
     }
 
-    // A session waiting for you: the calm green Ready line instead of the spinner.
-    const bool cc_live = cc_seen && cc_cur.sessions > 0 && cc_cur.state != CC_NONE && now - cc_at_ms < CC_LIVE_MS;
-    const bool ready = s_ble_connected && cc_live && cc_cur.state == CC_IDLE && now - connected_at_ms >= 5000;
-    set_ticker_ready(ready);
-    if (ready) return;
+    // Companion-driven lines. "Known": the bridge reported within CC_LIVE_MS
+    // (it does with every usage payload). "Live": it knows of a session. A
+    // session waiting for you → the calm green Ready; a bridge that knows of
+    // no session at all → a dim Idle, not the whimsical spinner words, which
+    // would suggest work that isn't happening.
+    const bool cc_known = cc_seen && now - cc_at_ms < CC_LIVE_MS;
+    const bool cc_live = cc_known && cc_cur.sessions > 0 && cc_cur.state != CC_NONE;
+    const bool settled = s_ble_connected && now - connected_at_ms >= 5000;
+    if (settled && cc_live && cc_cur.state == CC_IDLE) {
+        set_ticker_mode(TICKER_READY);
+        return;
+    }
+    if (settled && cc_known && !cc_live && view_state != 1) {   // "No data" keeps its hint
+        set_ticker_mode(TICKER_IDLE);
+        return;
+    }
+    set_ticker_mode(TICKER_WHIMSY);
 
     if (now - anim_last_ms < spinner_ms[anim_spinner_idx]) return;
     anim_last_ms = now;
@@ -2558,7 +2583,7 @@ static void apply_header_visibility(void) {
         else               lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
     }
     if (ready_dot) {
-        if (s.show_status && ticker_ready) lv_obj_clear_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
+        if (s.show_status && ticker_mode != TICKER_WHIMSY) lv_obj_clear_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
         else                               lv_obj_add_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
     }
 }
