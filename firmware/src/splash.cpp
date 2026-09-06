@@ -282,7 +282,7 @@ static bool            force_full   = false;  // repaint everything on the next 
 static void blit_cells(const uint8_t* cells, const uint16_t* palette,
                        int gx0, int gy0, int gx1, int gy1) {
     if (!strip_buf) return;
-    const bool be = board_caps().be_pixels;
+    const bool be = board_caps().be_pixels && !display_hal_swap_on_flush();
     const int spc = scr_cell;
     const int bw  = (gx1 - gx0 + 1) * spc;          // band width, px
     const int px  = scr_offx + gx0 * spc;

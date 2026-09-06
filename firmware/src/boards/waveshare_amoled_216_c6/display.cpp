@@ -37,6 +37,8 @@ static bool                  pix_cs_low = false;
 // The C6's SPI DMA takes at most 32 KB per transaction (an 18-bit bit-length
 // field); the bus max_transfer_sz (platformio.ini) is sized to match.
 #define PIX_CHUNK_MAX 32768
+static bool swap_on_flush = false;   // LVGL renders plain RGB565; we swap before the bus (debug A/B)
+static bool async_enabled = true;    // false: the library's synchronous pixel path (debug A/B)
 
 static inline void pix_cs(bool low) {
     digitalWrite(LCD_CS, low ? LOW : HIGH);
@@ -135,7 +137,10 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
     uint16_t* buf = const_cast<uint16_t*>(pixels);
     const size_t n = (size_t)w * (size_t)h;
 
-    if (!pix_dev) {                              // no async device: library path
+    if (swap_on_flush) {                         // LVGL rendered little-endian: make it bus order here
+        for (size_t i = 0; i < n; i++) buf[i] = (uint16_t)((buf[i] << 8) | (buf[i] >> 8));
+    }
+    if (!pix_dev || !async_enabled) {            // no async device: library path (data already in bus order)
         gfx->draw16bitBeRGBBitmap(x, y, buf, w, h);
         return;
     }
@@ -201,3 +206,8 @@ void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2) 
     *x2 = *x2 | 1;
     *y2 = *y2 | 1;
 }
+
+void display_hal_set_swap_on_flush(bool on) { swap_on_flush = on; }
+bool display_hal_swap_on_flush(void)        { return swap_on_flush; }
+void display_hal_set_async(bool on)         { display_hal_wait(); async_enabled = on; }
+
