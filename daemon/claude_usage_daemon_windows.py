@@ -32,10 +32,12 @@ try:
     import companion as cc_mod
     import trend as trend_mod
     import tokenkeeper as tk_mod
+    import stats as stats_mod
 except ImportError:  # pragma: no cover - package import path
     from . import companion as cc_mod
     from . import trend as trend_mod
     from . import tokenkeeper as tk_mod
+    from . import stats as stats_mod
 
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
@@ -46,6 +48,7 @@ POLL_INTERVAL = 60
 TICK = 5
 HOST_BATT_CHECK_S = 10   # PowerShell/CIM is slow; still far quicker than the 60 s poll
 COMPANION_PUSH_MIN_S = 0.25   # coalesce bursts of hook events into one BLE write
+STATS_REFRESH_S = 300         # rescan the transcripts for the Stats page this often
 BLE_PAYLOAD_MAX = 500    # firmware rx buffer is 512 bytes incl. NUL; keep a margin
 CONNECT_RETRIES = 3        # D-01: attempts before giving up on a device
 CONNECT_RETRY_DELAY = 2.0  # D-01: seconds between failed connect attempts
@@ -238,6 +241,11 @@ def read_token_keeper_setting() -> str:
     return v if v in ("on", "off") else "on"
 
 
+def read_stats_setting() -> str:
+    v = (_config_value("stats") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
 TOKEN_FILE = CONFIG_FILE.parent / "companion.token"
 
 
@@ -285,9 +293,43 @@ def add_trend_fields(payload: dict, now: float | None = None) -> None:
 
 def finalize_payload(payload: dict) -> dict:
     record_history(payload)
-    add_trend_fields(payload)
-    add_companion_fields(payload)
+    add_companion_fields(payload)          # "tr" is no longer sent: the Trend page gave way to Stats
     return payload
+
+
+# --- Stats page ("st") — see the macOS daemon for the long version --------------------
+STATS: "stats_mod.ClaudeStats | None" = None
+STATS_CACHE = CONFIG_FILE.parent / "stats-scan.json"
+_st_dirty = False
+
+
+def stats_project_dirs() -> list[Path]:
+    dirs = []
+    if config_dir := os.environ.get("CLAUDE_CONFIG_DIR"):
+        dirs.append(Path(config_dir) / "projects")
+    dirs.append(Path.home() / ".claude" / "projects")
+    return dirs
+
+
+def stats_payload() -> dict | None:
+    if STATS is None or read_stats_setting() != "on":
+        return None
+    return STATS.payload()
+
+
+async def stats_loop() -> None:
+    global _st_dirty
+    while True:
+        try:
+            changed = await asyncio.to_thread(STATS.refresh) if STATS is not None else False
+        except Exception as e:  # noqa: BLE001
+            log(f"Stats scan failed: {e}")
+            changed = False
+        if changed:
+            _st_dirty = True
+            if _cc_wake is not None:
+                _cc_wake.set()
+        await asyncio.sleep(STATS_REFRESH_S)
 
 
 def companion_beat(last_payload: dict | None) -> dict:
@@ -746,7 +788,9 @@ class Session:
 
     async def write_payload(self, payload: dict) -> bool:
         data = shrink_payload(payload)
-        if "cc" in payload and len(payload) <= 2:
+        if "st" in payload and len(payload) == 1:
+            log(f"Sending ({len(data)} B): stats page")
+        elif "cc" in payload and len(payload) <= 2:
             log(f"Sending ({len(data)} B): {COMPANION.describe()}")     # companion-only beat
         else:
             log(f"Sending: {data.decode()}")
@@ -1004,6 +1048,8 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
     last_batt_check = 0.0
     last_cc_push = 0.0
     _cc_dirty = True                            # a fresh link gets the companion state at once
+    global _st_dirty
+    _st_dirty = True                            # … and the Stats page numbers
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
@@ -1119,6 +1165,13 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                         if note_write_failure():
                             break
 
+            # Stats page: its own small beat, only when the numbers changed.
+            if _st_dirty:
+                st = stats_payload()
+                _st_dirty = False
+                if st is not None and not await session.write_payload({"st": st}):
+                    _st_dirty = True
+
             # Wake on a refresh request, a companion event OR a stop, whichever
             # comes first. Waking promptly on stop_event is what lets the finally
             # below run client.disconnect() before the process exits, so the peer
@@ -1188,12 +1241,19 @@ async def main(tray_state=None) -> None:
     log("=== Claude Usage Tracker Daemon (BLE, Windows) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
-    global HISTORY
+    global HISTORY, STATS
     HISTORY = trend_mod.History(HISTORY_FILE)
     if HISTORY.samples:
         log(f"Trend history: {len(HISTORY.samples)} samples in {HISTORY_FILE}")
+    stats_task = None
+    if read_stats_setting() == "on" and not os.environ.get("CLAWDMETER_NO_LISTENER"):
+        STATS = stats_mod.ClaudeStats(stats_project_dirs(), STATS_CACHE,
+                                      exclude_substrings=(CONFIG_FILE.parent.name,), log=log)
+        stats_task = asyncio.create_task(stats_loop())
     cc_server = None
-    if read_companion_setting() == "on":
+    if os.environ.get("CLAWDMETER_NO_LISTENER"):
+        log("Companion listener off (CLAWDMETER_NO_LISTENER)")
+    elif read_companion_setting() == "on":
         token = companion_token()
         cc_server = await cc_mod.start_companion_server(
             COMPANION, _companion_changed, read_companion_bind(), read_companion_port(), log=log, token=token)
@@ -1238,6 +1298,8 @@ async def main(tray_state=None) -> None:
 
     if cc_server is not None:
         cc_server.close()
+    if stats_task is not None:
+        stats_task.cancel()
 
 
 if __name__ == "__main__":

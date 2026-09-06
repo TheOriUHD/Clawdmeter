@@ -72,6 +72,8 @@ class TokenKeeper:
         renewed); False when the CLI is missing, on cooldown, or failed.
         """
         now = time.time() if now is None else now
+        if os.environ.get("CLAWDMETER_NO_TOKEN_KEEPER"):     # tests / operators who never want a spawn
+            return False
         if not self.can_run(now):
             return False
         self.last_run = now

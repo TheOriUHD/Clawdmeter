@@ -33,10 +33,12 @@ try:
     import companion as cc_mod
     import trend as trend_mod
     import tokenkeeper as tk_mod
+    import stats as stats_mod
 except ImportError:  # pragma: no cover - package import path
     from . import companion as cc_mod
     from . import trend as trend_mod
     from . import tokenkeeper as tk_mod
+    from . import stats as stats_mod
 
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
@@ -47,6 +49,7 @@ POLL_INTERVAL = 60
 TICK = 2                 # inner-loop tick: link check + host-battery watch
 HOST_BATT_CHECK_S = 2    # a plug/unplug reaches the device within about this long
 COMPANION_PUSH_MIN_S = 0.25   # coalesce bursts of hook events into one BLE write
+STATS_REFRESH_S = 300         # rescan the transcripts for the Stats page this often
 BLE_PAYLOAD_MAX = 500    # firmware rx buffer is 512 bytes incl. NUL; keep a margin
 CONNECT_TIMEOUT = 20.0
 
@@ -487,6 +490,12 @@ def read_trend_setting() -> str:
     return v if v in ("on", "off") else "on"
 
 
+def read_stats_setting() -> str:
+    """`stats` config option: on|off (default on) — the device's Stats page."""
+    v = (_config_value("stats") or "on").lower()
+    return v if v in ("on", "off") else "on"
+
+
 def read_token_keeper_setting() -> str:
     """`token_keeper` config option: on|off (default on) — see tokenkeeper.py."""
     v = (_config_value("token_keeper") or "on").lower()
@@ -549,11 +558,47 @@ def add_trend_fields(payload: dict, now: float | None = None) -> None:
 
 
 def finalize_payload(payload: dict) -> dict:
-    """Everything a fresh usage payload carries beyond the numbers themselves."""
+    """Everything a fresh usage payload carries beyond the numbers themselves.
+    (History is still recorded; the Trend page gave way to the Stats page, so
+    "tr" is no longer sent.)"""
     record_history(payload)
-    add_trend_fields(payload)
     add_companion_fields(payload)
     return payload
+
+
+# --- Stats page ("st") --------------------------------------------------------------
+# Lifetime Claude Code stats from the local transcripts (stats.py): sent as its
+# own beat on connect and whenever a rescan changes them (every STATS_REFRESH_S),
+# never inside the usage payload — the heatmap alone is ~170 bytes.
+STATS: "stats_mod.ClaudeStats | None" = None
+STATS_CACHE = CONFIG_FILE.parent / "stats-scan.json"
+_st_dirty = False
+
+
+def stats_project_dirs() -> list[Path]:
+    return [d / "projects" for d in read_config_dirs()]
+
+
+def stats_payload() -> dict | None:
+    if STATS is None or read_stats_setting() != "on":
+        return None
+    return STATS.payload()
+
+
+async def stats_loop() -> None:
+    """Background rescan; wakes the device loop when the numbers moved."""
+    global _st_dirty
+    while True:
+        try:
+            changed = await asyncio.to_thread(STATS.refresh) if STATS is not None else False
+        except Exception as e:  # noqa: BLE001 - never let a scan hiccup kill the daemon
+            log(f"Stats scan failed: {e}")
+            changed = False
+        if changed:
+            _st_dirty = True
+            if _wake is not None:
+                _wake.set()
+        await asyncio.sleep(STATS_REFRESH_S)
 
 
 def companion_beat(last_payload: dict | None) -> dict:
@@ -1244,6 +1289,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     last_batt_check = 0.0
     last_cc_push = 0.0
     _cc_dirty = True                            # a fresh link gets the companion state at once
+    global _st_dirty
+    _st_dirty = True                            # … and the Stats page numbers
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
@@ -1308,6 +1355,13 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 if "cc" in beat and not await session.write_payload(beat, note=COMPANION.describe()):
                     _cc_dirty = True                # retry on the next tick
 
+            # Stats page: its own small beat, only when the numbers changed.
+            if _st_dirty:
+                st = stats_payload()
+                _st_dirty = False
+                if st is not None and not await session.write_payload({"st": st}, note="stats page"):
+                    _st_dirty = True
+
             try:
                 if _wake is not None:
                     await asyncio.wait_for(_wake.wait(), timeout=TICK)
@@ -1343,12 +1397,19 @@ async def main() -> None:
     log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
-    global HISTORY
+    global HISTORY, STATS
     HISTORY = trend_mod.History(HISTORY_FILE)
     if HISTORY.samples:
         log(f"Trend history: {len(HISTORY.samples)} samples in {HISTORY_FILE}")
+    stats_task = None
+    if read_stats_setting() == "on" and not os.environ.get("CLAWDMETER_NO_LISTENER"):
+        STATS = stats_mod.ClaudeStats(stats_project_dirs(), STATS_CACHE,
+                                      exclude_substrings=(CONFIG_FILE.parent.name,), log=log)
+        stats_task = asyncio.create_task(stats_loop())
     cc_server = None
-    if read_companion_setting() == "on":
+    if os.environ.get("CLAWDMETER_NO_LISTENER"):
+        log("Companion listener off (CLAWDMETER_NO_LISTENER)")
+    elif read_companion_setting() == "on":
         token = companion_token()
         cc_server = await cc_mod.start_companion_server(
             COMPANION, _companion_changed, read_companion_bind(), read_companion_port(), log=log, token=token)
@@ -1394,6 +1455,8 @@ async def main() -> None:
 
     if cc_server is not None:
         cc_server.close()
+    if stats_task is not None:
+        stats_task.cancel()
 
 
 if __name__ == "__main__":

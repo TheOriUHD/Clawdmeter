@@ -44,7 +44,8 @@ exit {exit_code}
     return script, rec
 
 
-def test_keeper_runs_cli_quietly_and_respects_cooldown(tmp_path):
+def test_keeper_runs_cli_quietly_and_respects_cooldown(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAWDMETER_NO_TOKEN_KEEPER", raising=False)   # the suite-wide guard is off for this test
     script, rec = _fake_cli(tmp_path)
     logs = []
     keeper = tk.TokenKeeper(cwd=tmp_path / "work", min_gap_s=100, log=logs.append)
@@ -63,7 +64,8 @@ def test_keeper_runs_cli_quietly_and_respects_cooldown(tmp_path):
     assert asyncio.run(keeper.run("later", now=1200.0)) is True and rec.exists()
 
 
-def test_keeper_reports_failures(tmp_path):
+def test_keeper_reports_failures(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAWDMETER_NO_TOKEN_KEEPER", raising=False)
     script, _ = _fake_cli(tmp_path, exit_code=3)
     logs = []
     keeper = tk.TokenKeeper(cwd=tmp_path, min_gap_s=0, log=logs.append)
@@ -91,3 +93,7 @@ def test_mac_reads_expiry_from_blob_and_file(tmp_path):
         assert asyncio.run(mac.keep_token_fresh("x")) is False
     with patch.object(mac, "CONFIG_FILE", tmp_path / "missing"):
         assert mac.read_token_keeper_setting() == "on"
+    # The suite-wide guard keeps every other test from spawning the real CLI.
+    guarded = tk.TokenKeeper(cwd=tmp_path, min_gap_s=0)
+    guarded.cli = "/definitely/not/run"
+    assert asyncio.run(guarded.run("x")) is False
