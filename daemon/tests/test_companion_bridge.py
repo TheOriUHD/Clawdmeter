@@ -165,7 +165,7 @@ def test_windows_daemon_parity(tmp_path):
         win.COMPANION = cc.Companion()
         win.COMPANION.enabled = True
         out = win.finalize_payload({"s": 5, "sr": 1, "w": 2, "wr": 3, "st": "allowed", "acct": "pro", "ok": True})
-        assert out["cc"] == {"n": 0, "a": 0, "s": 0} and len(out["tr"]["h"]) == 24
+        assert out["cc"] == {"n": 0, "a": 0, "s": 0} and "tr" not in out     # trend retired: history only
         # Long payloads go with response; short ones without.
         client = MagicMock()
         client.mtu_size = 247

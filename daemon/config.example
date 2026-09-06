@@ -71,12 +71,13 @@ companion_bind = 0.0.0.0
 # this file in companion.token; set it here to choose your own.
 # companion_token = my-secret
 
-# Trend page — record every poll (session %, weekly %) so the device can draw
-# the last 24 hours and the last 7 days. History lives next to this file in
-# history.json (eight days, pruned automatically).
-#   on  = record and send (default)
-#   off = no history, no Trend data
-trend = on
+# Stats page — lifetime Claude Code numbers (sessions, messages, tokens, active
+# days, streaks, peak hour, favourite model, activity heatmap) computed from the
+# transcripts in ~/.claude/projects. Scanned incrementally every 5 minutes; the
+# per-file progress lives next to this file in stats-scan.json.
+#   on  = scan and send (default)
+#   off = no Stats data
+stats = on
 
 # Token keeper. The daemon reads the OAuth token Claude Code stores (Keychain on
 # macOS, .credentials.json elsewhere) and never refreshes it itself — Claude

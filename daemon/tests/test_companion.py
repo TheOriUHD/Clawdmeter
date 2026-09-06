@@ -178,13 +178,13 @@ def test_daemon_payload_helpers(tmp_path):
         payload = {"s": 40, "sr": 10, "w": 12, "wr": 500, "st": "allowed", "acct": "pro", "ok": True}
         out = mac.finalize_payload(dict(payload))
         assert out["cc"] == {"n": 0, "a": 0, "s": 0}
-        assert out["tr"]["h"][-1] == 40 and len(out["tr"]["h"]) == 24 and len(out["tr"]["d"]) == 7
+        assert "tr" not in out and hist.samples and hist.samples[-1][1] == 40    # recorded, not sent
         # A beat before any usage data is companion-only; after, it re-stamps the last payload.
         mac.COMPANION.ingest(ev("UserPromptSubmit"))
         beat = mac.companion_beat(None)
         assert set(beat) == {"cc"} and beat["cc"]["s"] == cc.CC_THINKING
         beat2 = mac.companion_beat(out)
-        assert beat2["s"] == 40 and beat2["cc"]["s"] == cc.CC_THINKING and beat2["tr"] == out["tr"]
+        assert beat2["s"] == 40 and beat2["cc"]["s"] == cc.CC_THINKING
         # Oversized payloads shed the trend first.
         big = dict(out)
         big["tr"] = {"h": [100] * 24, "d": [100] * 7, "pad": "x" * 600}
