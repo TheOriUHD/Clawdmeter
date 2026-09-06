@@ -66,39 +66,38 @@ makes the device more functional while keeping its design language intact:
   ended) to the daemon, which relays one compact state to the device. The
   **status line stops making words up** and says what Claude is actually doing
   (`Editing ui.cpp…`, `Bash: pio run…`, `Your turn…`); the whimsical spinner
-  words stay for plain thinking — they are Claude Code's own. A **Working page**
-  lives left of Usage: Clawd at the laptop while Claude works, the state line,
-  project and elapsed time, a `2 sessions` pill when several are live. With
-  **Auto-switch** on, the page slides in by itself when Claude starts working
-  and slides home once it has been quiet for a while.
+  words stay for plain thinking — they are Claude Code's own. When a session
+  is waiting for you the line turns into a calm green **Ready** with a
+  breathing dot.
 - **"Needs you" alerts.** A permission prompt, a question, a plan to approve
   — or the end of a long turn — wakes the panel, slides to the Working page
-  (title **Waiting** / **Done**), starts a calm orange **glow** breathing
-  along the screen edge — nested rounded rings that follow the glass's real
-  corner radius (70 px on the 2.16, `BoardCaps.corner_radius`), so nothing is
-  cut off by the bezel — has Clawd **jump and wave**, and plays a **two-note
-  chime** through the speaker (the C6 2.16's ES8311 is now wired up; upstream
-  left it silent). One tap acknowledges. Settings → **Alerts** picks the chime
-  (Off / Needs you / All), has a **Preview** button and a **Volume** slider
-  (linear in dB; the codec follows your finger and auditions on release);
-  Settings → **Companion** toggles Auto-switch and Glow and sets **Back home
-  after** (15 s … 5 min, or Stay).
-- **Trend page.** Right of Usage: the last **24 hours** of the session window
-  as a line, and **daily use** of the weekly quota as seven bars (today in
-  accent). The daemon keeps eight days of history in
-  `~/.config/claude-usage-monitor/history.json`.
-- **Serial QA hook.** `page splash|usage|working|trend|settings|settings2..5|about`,
-  `flip`, `cc <state> [label]`, `trend demo`, `alert [0|1]`, `preview`, `volume N`,
-  `corners on|off`, `radius N`, `swipe up|down` and `stats` over the USB serial console drive the screens on boards
+  — wakes the panel, starts a calm orange **glow** breathing along the screen
+  edge (nested rounded rings that follow the glass's real corner radius, 70 px
+  on the 2.16, so nothing is cut off by the bezel), has the corner Clawd
+  **jump, wave and point**, and plays a **two-note chime** through the speaker
+  (the C6 2.16's ES8311 is now wired up; upstream left it silent). One tap
+  acknowledges. Settings → **Alerts** picks the chime (Off / Needs you / All),
+  has a **Preview** button, a **Volume** slider (linear in dB; the codec
+  follows your finger and auditions on release) and the **Glow** toggle.
+- **Stats page.** Left of Usage: the Claude app's stats card on the desk —
+  **Sessions, Messages, Tokens, Active days, Streak, Best streak, Peak hour,
+  Model** as eight tiles, and a 24-week **activity heatmap** in accent tones.
+  The daemon computes it from the local Claude Code transcripts
+  (`~/.claude/projects`), scanning only what was appended since the last pass,
+  and sends it as its own small beat whenever the numbers move.
+- **Serial QA hook.** `page splash|usage|stats|settings|settings2..4|about`,
+  `flip`, `cc <state> [label]`, `demo stats`, `alert [0|1]`, `preview`, `volume N`,
+  `corners on|off`, `radius N`, `render plain|swapped`, `dma on|off`, `swipe
+  up|down` and `stats` over the USB serial console drive the screens on boards
   without the framebuffer screenshot (the C6 ports).
 
-|      Weekly card, Fable face      |        Working — Claude at work        |      Waiting — Claude needs you       |            Trend             |
-| :-------------------------------: | :------------------------------------: | :-----------------------------------: | :--------------------------: |
-| ![Fable](screenshots/usage_fable.png) | ![Working](screenshots/working.png) | ![Waiting](screenshots/waiting.png) | ![Trend](screenshots/trend.png) |
+|      Weekly card, Fable face      |              Stats              |      Claude needs you (glow)      |
+| :-------------------------------: | :-----------------------------: | :-------------------------------: |
+| ![Fable](screenshots/usage_fable.png) | ![Stats](screenshots/stats.png) | ![Needs you](screenshots/waiting.png) |
 
-|     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |     Settings 3 — Weekly card     |     Settings 4 — Alerts     |     Settings 5 — Companion     |       Settings 6 — About      |
-| :----------------------------------: | :-----------------------------------: | :------------------------------: | :-------------------------: | :----------------------------: | :---------------------------: |
-| ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![Settings 4](screenshots/settings4.png) | ![Settings 5](screenshots/settings5.png) | ![About](screenshots/about.png) |
+|     Settings 1 — clock & toggles     |     Settings 2 — sliders & pairing    |     Settings 3 — Weekly card     |     Settings 4 — Alerts     |       Settings 5 — About      |
+| :----------------------------------: | :-----------------------------------: | :------------------------------: | :-------------------------: | :---------------------------: |
+| ![Settings](screenshots/settings.png) | ![Settings 2](screenshots/settings2.png) | ![Settings 3](screenshots/settings3.png) | ![Settings 4](screenshots/settings4.png) | ![About](screenshots/about.png) |
 
 Wire format additions: `"ws":[{"n":"Fable","p":8}, …]` — one entry per weekly
 scoped-model limit (`n` label ≤ 15 chars, `p` percent; absent key = no scoped
@@ -108,14 +107,17 @@ percent and plugged-in flag (absent = no battery to report);
 "e": 37, "m": "Fable 5.1", "g": 0, "h": "devbox"}` — the companion's headline
 session (`s`: 0 none · 1 idle · 2 thinking · 3 tool · 4 done · 5 needs you ·
 6 error · 7 compacting · 8 long turn done; `l` ≤ 24 chars, `e` seconds in that
-state); and `"tr": {"h": [24 hourly session maxima], "d": [7 daily weekly-use
-values]}` (`-1` = no data). A `"cc"`-only beat is applied without touching the
-usage numbers. Old firmware ignores the keys, old daemons simply never send
+state); and `"st": {"se", "me", "tk", "ad", "cs", "ls", "ph", "fm", "hm"}` — the
+Stats page (sessions, messages, tokens, active days, current/best streak, peak
+hour, favourite model, and the heatmap as one char per day, `0`-`4` or `x` for
+days still ahead in the current week, whole Sunday-first weeks, oldest first),
+sent as its own beat. A `"cc"`- or `"st"`-only beat is applied without touching
+the usage numbers. Old firmware ignores the keys, old daemons simply never send
 them.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Usage has a page on each side: swipe right for **Working** (what Claude Code is doing right now, once the companion hooks are installed) and left for **Trend** (24 hours / 7 days of history); page dots appear while you swipe. Swipe up for the six Settings pages (clock & toggles, sliders & pairing, Weekly card, Alerts, Companion, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and shows the Working page; one tap acknowledges.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe right from Usage for **Stats** (your lifetime Claude Code numbers and activity heatmap); page dots appear while you swipe. Swipe up for the five Settings pages (clock & toggles, sliders & pairing, Weekly card, Alerts, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and the corner Clawd jumps and waves; the status line says what Claude is doing the rest of the time. One tap acknowledges an alert.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |

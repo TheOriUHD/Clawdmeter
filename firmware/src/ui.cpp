@@ -95,22 +95,17 @@ struct Layout {
     int16_t pair_y1, pair_y2, pair_y3;
     int16_t idle_px;                 // sleeping-creature size on the idle screen
 
-    // Working page (companion): the actor's feet line and the two text rows
-    int16_t work_cell;               // px per art cell for the actor
-    int16_t work_feet_y;             // body-relative feet line of the actor
-    int16_t work_label_y;            // state line ("Editing ui.cpp")
-    int16_t work_sub_y;              // project · elapsed
-    const lv_font_t* work_font;
-    const lv_font_t* work_sub_font;
-    int16_t glow_w;                  // alert glow strip width
+    int16_t glow_w;                  // alert glow ring width (all rings)
     int16_t level_dots_y;            // body-relative: page dots of the usage level
+    int16_t mascot_cell;             // px per art cell for the header mascot actor (PSRAM-less boards)
 
-    // Trend page (charts live inside cards the size of the usage cards)
-    int16_t tr_chart_top;            // card-relative top of the chart area
-    int16_t tr_chart_h;              // line chart height
-    int16_t tr_bars_h;               // day bars height
-    int16_t tr_bar_gap;
-    const lv_font_t* tr_day_font;
+    // Stats page: eight tiles in a 4×2 grid, then the activity heatmap
+    int16_t st_tile_h, st_gap;
+    const lv_font_t* st_label_font;
+    const lv_font_t* st_value_font;
+    int16_t st_cell, st_cell_gap;    // heatmap cell size and spacing
+    int16_t st_weeks;                // heatmap columns
+    int16_t st_hm_y;                 // body-relative top of the heatmap
 
     // Bluetooth screen
     int16_t bt_info_panel_h;
@@ -199,19 +194,14 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_device_font   = &font_styrene_28;
         L.bt_credit_1_font = &font_styrene_24;
         L.bt_credit_2_font = &font_styrene_20;
-        L.work_cell = 5;
-        L.work_feet_y = 208;
-        L.work_label_y = 228;
-        L.work_sub_y = 270;
-        L.work_font = &font_styrene_28;
-        L.work_sub_font = &font_styrene_20;
         L.glow_w = 15;                   // five 3 px rings
         L.level_dots_y = 2 * L.usage_panel_h + L.usage_panel_gap + 6;
-        L.tr_chart_top = 54;
-        L.tr_chart_h = 68;
-        L.tr_bars_h = 52;
-        L.tr_bar_gap = 12;
-        L.tr_day_font = &font_styrene_16;
+        L.mascot_cell = 3;
+        L.st_tile_h = 86;  L.st_gap = 8;
+        L.st_label_font = &font_styrene_14;
+        L.st_value_font = &font_styrene_24;
+        L.st_cell = 14;  L.st_cell_gap = 4;  L.st_weeks = 24;
+        L.st_hm_y = 2 * 86 + 8 + 12;
     } else if (c.height >= 300) {
         // Compact layout — tuned for 368x448 (AMOLED-1.8).
         L.content_y = 85;
@@ -247,19 +237,14 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_device_font   = &font_styrene_20;
         L.bt_credit_1_font = &font_styrene_16;
         L.bt_credit_2_font = &font_styrene_14;
-        L.work_cell = 4;
-        L.work_feet_y = 187;
-        L.work_label_y = 205;
-        L.work_sub_y = 240;
-        L.work_font = &font_styrene_24;
-        L.work_sub_font = &font_styrene_16;
         L.glow_w = 10;                   // five 2 px rings
         L.level_dots_y = 2 * L.usage_panel_h + L.usage_panel_gap + 5;
-        L.tr_chart_top = 46;
-        L.tr_chart_h = 58;
-        L.tr_bars_h = 44;
-        L.tr_bar_gap = 10;
-        L.tr_day_font = &font_styrene_14;
+        L.mascot_cell = 2;
+        L.st_tile_h = 74;  L.st_gap = 6;
+        L.st_label_font = &font_styrene_12;
+        L.st_value_font = &font_styrene_20;
+        L.st_cell = 10;  L.st_cell_gap = 3;  L.st_weeks = 24;
+        L.st_hm_y = 2 * 74 + 6 + 10;
     } else {
         // Small layout — tuned for 240x240 (LCD-1.54 and similar square TFTs).
         // Everything shrinks: fonts two steps down, panels ~half height, and
@@ -329,25 +314,18 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_device_font   = &font_styrene_14;
         L.bt_credit_1_font = &font_styrene_12;
         L.bt_credit_2_font = &font_styrene_12;
-        L.work_cell = 2;
-        L.work_feet_y = 88;
-        L.work_label_y = 96;
-        L.work_sub_y = 118;
-        L.work_font = &font_styrene_16;
-        L.work_sub_font = &font_styrene_12;
         L.glow_w = 5;                    // five 1 px rings
         L.level_dots_y = 2 * L.usage_panel_h + L.usage_panel_gap + 3;
-        L.tr_chart_top = 26;
-        L.tr_chart_h = 30;
-        L.tr_bars_h = 24;
-        L.tr_bar_gap = 6;
-        L.tr_day_font = &font_styrene_12;
+        L.mascot_cell = 1;
+        L.st_tile_h = 40;  L.st_gap = 4;
+        L.st_label_font = &font_styrene_12;
+        L.st_value_font = &font_styrene_14;
+        L.st_cell = 6;  L.st_cell_gap = 2;  L.st_weeks = 24;
+        L.st_hm_y = 2 * 40 + 4 + 6;
     }
 #ifndef BOARD_HAS_PSRAM
-    // Internal SRAM only: the actor canvas goes one size step down (34×30
-    // cells at 4 px → 136×120×2 ≈ 33 KB) and the idle creature shrinks from
-    // 160 to 120 px (≈ 10 KB instead of 21).
-    if (L.work_cell > 4) { L.work_cell = 4; L.work_feet_y -= 8; }
+    // Internal SRAM only: the idle creature shrinks from 160 to 120 px
+    // (≈ 10 KB instead of 21).
     if (L.idle_px > 120) L.idle_px = 120;
 #endif
 
@@ -411,38 +389,42 @@ static lv_obj_t* ready_dot = nullptr;
 static bool      ticker_ready = false;          // the ticker currently shows the Ready style
 static int32_t   ready_dot_opa = 255;
 
-// ---- Usage level: three horizontal pages ----
-// Working (companion) sits left of Usage, Trend right of it; the ticker and
-// the page dots belong to the level itself so they stay put while pages slide.
-#define LEVEL_PAGES 3
-#define LEVEL_WORK  0
+// ---- Usage level: two horizontal pages ----
+// Stats sits left of Usage; the ticker and the page dots belong to the level
+// itself so they stay put while pages slide.
+#define LEVEL_PAGES 2
+#define LEVEL_STATS 0
 #define LEVEL_USAGE 1
-#define LEVEL_TREND 2
 static lv_obj_t* level = nullptr;               // the surface that slides vertically against Settings
 static lv_obj_t* level_pages[LEVEL_PAGES];
 static lv_obj_t* level_dots[LEVEL_PAGES];
 static int       level_page = LEVEL_USAGE;
 static int       title_level_page = LEVEL_USAGE; // which level page the header title describes
 static uint32_t  level_dots_hide_ms = 0;         // when the dots start fading (0 = hidden)
-static int       pending_level_target = -1;      // a programmatic page change waiting for the gesture/anim to end
 static char      title_cur[24] = "";
 
-// ---- Working page (companion) ----
-static lv_obj_t* page_work = nullptr;
-static lv_obj_t* work_actor = nullptr;
-static lv_obj_t* lbl_work_state = nullptr;
-static lv_obj_t* lbl_work_sub = nullptr;
-static lv_obj_t* work_pill = nullptr;            // "2 sessions" (hidden for one)
+// ---- Companion state (drives the ticker, the alerts and the header mascot) ----
 static CompanionData cc_cur = {};
 static bool      cc_seen = false;                // any "cc" ever received
-static uint32_t  cc_at_ms = 0;                   // lv_tick when cc_cur landed (elapsed ticks from there)
-static uint32_t  work_sub_refresh_ms = 0;
-static bool      auto_arrived = false;           // the device moved the user to the Working page itself
-static uint32_t  home_due_ms = 0;                // when to slide back to Usage after an auto-switch
+static uint32_t  cc_at_ms = 0;                   // lv_tick when cc_cur landed
 static uint32_t  preview_until_ms = 0;           // "Preview" alert running until then
-static const char* const WORK_ACTS[] = { "laptop", "waving", "pointing", "jumping happy", "dancing" };
-static const char* const ALERT_ACTS[] = { "jumping happy", "waving", "pointing" };
+// The header mascot on PSRAM-less boards is an actor (splash_actor_*): the
+// still pose normally, these acts cycled while Claude needs you.
+static lv_obj_t* header_actor = nullptr;
+static const char* const HEADER_ACTS[] = { "waving", "pointing", "jumping happy" };
+static const char* const ALERT_ACTS[]  = { "jumping happy", "waving", "pointing" };
 static uint8_t   alert_act_idx = 0;
+
+// ---- Stats page ----
+#define ST_TILES 8
+static lv_obj_t* page_stats = nullptr;
+static lv_obj_t* st_value[ST_TILES];
+static lv_obj_t* st_hm = nullptr;                // heatmap: ONE object, cells painted in LV_EVENT_DRAW_MAIN
+static StatsData st_cur = {};
+static bool      st_seen = false;
+static const char* const ST_LABELS[ST_TILES] = {
+    "Sessions", "Messages", "Tokens", "Active days", "Streak", "Best streak", "Peak hour", "Model",
+};
 
 // ---- Alert glow ----
 // One full-screen transparent object that paints GLOW_RINGS nested rounded
@@ -457,20 +439,6 @@ static bool      alert_active = false;
 static int32_t   glow_level = 0;                 // animated 0..255
 static int       glow_radius = 0;                // corner radius in use (caps, or "radius N" over serial)
 static lv_obj_t* corner_test = nullptr;          // calibration overlay (serial "corners on")
-
-// ---- Trend page ----
-static lv_obj_t* page_trend = nullptr;
-static lv_obj_t* tr_line = nullptr;
-static lv_point_precise_t tr_pts[TREND_HOURS];
-static lv_obj_t* tr_dot = nullptr;
-static lv_obj_t* tr_bars[TREND_DAYS];
-static lv_obj_t* tr_day_lbl[TREND_DAYS];
-static lv_obj_t* lbl_tr_hour = nullptr;          // big number, 24 h card
-static lv_obj_t* lbl_tr_day = nullptr;           // big number, week card
-static lv_obj_t* lbl_tr_empty1 = nullptr;
-static lv_obj_t* lbl_tr_empty2 = nullptr;
-static TrendData tr_cur = {};
-static bool      tr_seen = false;
 
 // ---- Weekly card faces ----
 // Some plans meter one model separately inside the weekly window (Fable on
@@ -502,17 +470,15 @@ static lv_obj_t* face_dots[MAX_SCOPED_WEEKLY + 1];
 //           Status line (toggle) · Pairing (button, two taps)
 //   Page 2  Weekly card: Default face (picker built from the live limits) ·
 //           Flip every (stepped slider, Off … 30 s)
-//   Page 3  Alerts: Chime picker (Off / Needs you / All) + Preview · Volume slider
-//   Page 4  Companion: Auto-switch / Glow toggles · Back home after (stepped slider)
-//   Page 5  About (device info)
+//   Page 3  Alerts: Chime picker (Off / Needs you / All) + Preview · Volume slider + Glow toggle
+//   Page 4  About (device info)
 // Pages slide horizontally on swipe; the terra-cotta accent is the one
 // "active" colour across every control so they read as a family.
 static lv_obj_t* settings_container = nullptr;
-#define SET_PAGES 6
+#define SET_PAGES 5
 #define PAGE_FACE  2
 #define PAGE_ALERTS 3
-#define PAGE_COMPANION 4
-#define PAGE_ABOUT 5
+#define PAGE_ABOUT 4
 static lv_obj_t* settings_pages[SET_PAGES];
 static lv_obj_t* page_dots[SET_PAGES];
 static int       settings_page = 0;
@@ -525,7 +491,7 @@ static lv_obj_t* clock_preview = nullptr;
 
 // Toggles
 struct Toggle { lv_obj_t* track; lv_obj_t* knob; lv_obj_t* value; };
-static Toggle tg_battery, tg_mascot, tg_status, tg_autosw, tg_glow;
+static Toggle tg_battery, tg_mascot, tg_status, tg_glow;
 
 // Companion page: chime picker (Off / Needs you / All) + Preview button
 static lv_obj_t* chime_hl = nullptr;
@@ -534,8 +500,6 @@ static int16_t   chime_x[CHIME_MODE_COUNT];
 static lv_obj_t* preview_button = nullptr;
 static lv_obj_t* sl_volume = nullptr;
 static lv_obj_t* lbl_volume = nullptr;
-static lv_obj_t* sl_home = nullptr;
-static lv_obj_t* lbl_home = nullptr;
 
 // Sliders
 static lv_obj_t* sl_brightness = nullptr;
@@ -617,7 +581,6 @@ static lv_obj_t*  drag_in = nullptr;       // surface arriving (NULL = nothing t
 static int        drag_target_page = -1;   // H: page index of drag_in
 static bool       drag_commit = false;
 static bool       drag_tracking = false;   // finger is down; poll its position each tick
-static bool       slide_programmatic = false; // the current snap was started by auto_slide_level()
 static lv_indev_t* s_indev = nullptr;
 #define DRAG_START_PX   14                 // finger travel before a press becomes a drag
 #define DRAG_COMMIT_DIV 4                  // commit past span/4 …
@@ -650,7 +613,6 @@ static const uint32_t DATA_FRESH_MS = 90000;  // usage counts as "live" within t
 static const uint32_t CC_LIVE_MS = 15UL * 60UL * 1000UL;  // companion state drives the ticker this long after its last beat
 
 // ---- Shared ----
-static lv_image_dsc_t logo_dsc;
 static screen_t current_screen = SCREEN_USAGE;
 static bool     s_ble_connected = false;   // cached BLE connection state
 static uint32_t connected_at_ms = 0;       // when we last entered CONNECTED ("Connected" dwell)
@@ -741,11 +703,10 @@ static void render_title(bool force);
 static void refresh_battery_glyph(void);
 static void show_level_page(int page);
 static void snap_drag_ms(bool commit, uint32_t force_ms);
-static void render_work_page(void);
-static void render_trend_page(void);
+static void render_stats_page(void);
+static lv_obj_t* make_tile(lv_obj_t* parent, int x, int y, int w, int h, bool clickable);
 static void alert_start(int kind);
 static void alert_stop(void);
-static void auto_slide_level(int target);
 static void level_dots_show(void);
 static void update_level_dots(void);
 
@@ -828,15 +789,6 @@ static lv_obj_t* make_bar(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_radius(bar, 6, LV_PART_INDICATOR);
     return bar;
-}
-
-static void init_icon_dsc_rgb565a8(lv_image_dsc_t* dsc, int w, int h, const uint8_t* data) {
-    dsc->header.w = w;
-    dsc->header.h = h;
-    dsc->header.cf = LV_COLOR_FORMAT_RGB565A8;
-    dsc->header.stride = w * 2;
-    dsc->data = data;
-    dsc->data_size = w * h * 3;
 }
 
 // A label drawn as a rounded pill — the UI's labelling device (card names)
@@ -1095,277 +1047,140 @@ static void build_idle_group(lv_obj_t* parent) {
     lv_obj_add_flag(idle_group, LV_OBJ_FLAG_HIDDEN);  // update_view_state decides
 }
 
-// ---- Working page ----
-static const char* work_title(void) {
-    const uint32_t now = lv_tick_get();
-    // Kept short: the Tiempos title must clear the battery glyph on the right.
-    if (preview_until_ms && (int32_t)(preview_until_ms - now) > 0) return "Waiting";
-    if (!cc_seen) return "Claude";
-    switch (cc_cur.state) {
-    case CC_IDLE:       return "Ready";
-    case CC_THINKING:
-    case CC_TOOL:
-    case CC_COMPACTING: return "Working";
-    case CC_DONE:
-    case CC_TURN_DONE:  return "Done";
-    case CC_ATTENTION:  return "Waiting";
-    case CC_ERROR:      return "Error";
-    default:            return "Claude";
-    }
-}
-
-static void fmt_elapsed(uint32_t sec, char* buf, size_t n) {
-    if (sec < 60)        snprintf(buf, n, "%us", (unsigned)sec);
-    else if (sec < 3600) snprintf(buf, n, "%um %02us", (unsigned)(sec / 60), (unsigned)(sec % 60));
-    else                 snprintf(buf, n, "%uh %02um", (unsigned)(sec / 3600), (unsigned)((sec % 3600) / 60));
-}
-
-static uint32_t cc_elapsed_s(void) {
-    return (uint32_t)cc_cur.elapsed_s + (lv_tick_get() - cc_at_ms) / 1000;
-}
-
-static bool cc_is_working(uint8_t st) { return st == CC_THINKING || st == CC_TOOL || st == CC_COMPACTING; }
+// ---- Companion helpers ----
 static bool cc_is_attention(uint8_t st) { return st == CC_ATTENTION || st == CC_TURN_DONE; }
 
-// The actor follows the companion state; while an alert runs, the tick cycles
-// the exuberant acts instead (see ui_tick_anim).
-static int work_actor_state = -1;
-static void apply_work_actor(void) {
-    if (!work_actor) return;
-    const uint32_t now = lv_tick_get();
-    if (alert_active || (preview_until_ms && (int32_t)(preview_until_ms - now) > 0)) return;
-    const int st = cc_seen ? cc_cur.state : CC_NONE;
-    if (st == work_actor_state) return;
-    work_actor_state = st;
-    switch (st) {
-    case CC_THINKING:
-    case CC_TOOL:       splash_actor_play("laptop", true, false); break;
-    case CC_COMPACTING: splash_actor_play("dancing", true, false); break;
-    case CC_DONE:
-    case CC_TURN_DONE:  splash_actor_play("waving", false, true); break;
-    default:            if (!splash_actor_is_idle()) splash_actor_stop(); break;
+// ---- Stats page ----
+// The Claude app's stats card, in the device's own language: eight tiles in a
+// 4×2 grid (label above value) and a Sunday→Saturday activity heatmap of the
+// last weeks below, today's column last. Numbers come from the daemon's
+// transcript scan ("st"); until they arrive every tile reads "---".
+static void fmt_thousands(uint32_t n, char* buf, size_t len) {
+    char raw[16];
+    snprintf(raw, sizeof(raw), "%lu", (unsigned long)n);
+    const int digits = (int)strlen(raw);
+    size_t o = 0;
+    for (int i = 0; i < digits && o + 2 < len; i++) {
+        if (i && (digits - i) % 3 == 0) buf[o++] = ',';
+        buf[o++] = raw[i];
+    }
+    buf[o] = 0;
+}
+
+static void fmt_tokens(uint64_t n, char* buf, size_t len) {
+    if (n >= 1000000000ULL)      snprintf(buf, len, n >= 100000000000ULL ? "%.0fB" : "%.1fB", (double)n / 1e9);
+    else if (n >= 1000000ULL)    snprintf(buf, len, n >= 100000000ULL ? "%.0fM" : "%.1fM", (double)n / 1e6);
+    else if (n >= 1000ULL)       snprintf(buf, len, n >= 100000ULL ? "%.0fK" : "%.1fK", (double)n / 1e3);
+    else                         snprintf(buf, len, "%lu", (unsigned long)n);
+}
+
+static lv_color_t heat_color(char c) {
+    switch (c) {
+    case '1': return lv_color_mix(COL_ACCENT, COL_BAR_BG, 72);
+    case '2': return lv_color_mix(COL_ACCENT, COL_BAR_BG, 130);
+    case '3': return lv_color_mix(COL_ACCENT, COL_BAR_BG, 195);
+    case '4': return COL_ACCENT;
+    default:  return COL_BAR_BG;
     }
 }
 
-static void render_work_sub(void) {
-    if (!lbl_work_sub) return;
-    const uint32_t now = lv_tick_get();
-    if (preview_until_ms && (int32_t)(preview_until_ms - now) > 0) {
-        lv_label_set_text(lbl_work_sub, "Preview, tap to dismiss");
-        return;
+static void render_stats_page(void) {
+    if (!page_stats) return;
+    char buf[24];
+    const bool have = st_seen;
+    for (int i = 0; i < ST_TILES; i++) {
+        if (!have) { lv_label_set_text(st_value[i], "---"); continue; }
+        switch (i) {
+        case 0: fmt_thousands(st_cur.sessions, buf, sizeof(buf)); break;
+        case 1: fmt_thousands(st_cur.messages, buf, sizeof(buf)); break;
+        case 2: fmt_tokens(st_cur.tokens, buf, sizeof(buf)); break;
+        case 3: snprintf(buf, sizeof(buf), "%u", st_cur.active_days); break;
+        case 4: snprintf(buf, sizeof(buf), "%ud", st_cur.streak); break;
+        case 5: snprintf(buf, sizeof(buf), "%ud", st_cur.best_streak); break;
+        case 6:
+            if (st_cur.peak_hour < 0) strlcpy(buf, "---", sizeof(buf));
+            else if (clock_fmt == 12) {
+                int h12 = st_cur.peak_hour % 12; if (h12 == 0) h12 = 12;
+                snprintf(buf, sizeof(buf), "%d %s", h12, st_cur.peak_hour < 12 ? "AM" : "PM");
+            } else snprintf(buf, sizeof(buf), "%02d:00", st_cur.peak_hour);
+            break;
+        default: strlcpy(buf, st_cur.model[0] ? st_cur.model : "---", sizeof(buf)); break;
+        }
+        lv_label_set_text(st_value[i], buf);
     }
-    if (!cc_seen) {
-        lv_label_set_text(lbl_work_sub, "Install the Claude Code hooks\ngithub.com/TheOriUHD/Clawdmeter");
-        return;
-    }
-    if (cc_cur.state == CC_NONE || cc_cur.sessions == 0) {
-        lv_label_set_text(lbl_work_sub, "Start Claude Code to see it here");
-        return;
-    }
-    char el[16], buf[96];
-    fmt_elapsed(cc_elapsed_s(), el, sizeof(el));
-    const char* proj = cc_cur.project[0] ? cc_cur.project : (cc_cur.model[0] ? cc_cur.model : "Claude Code");
-    if (cc_cur.host[0]) snprintf(buf, sizeof(buf), "%s:%s, %s", cc_cur.host, proj, el);
-    else                snprintf(buf, sizeof(buf), "%s, %s", proj, el);
-    if (cc_cur.agents > 0) {
-        char ag[24];
-        snprintf(ag, sizeof(ag), ", %d agent%s", cc_cur.agents, cc_cur.agents == 1 ? "" : "s");
-        strlcat(buf, ag, sizeof(buf));
-    }
-    lv_label_set_text(lbl_work_sub, buf);
+    if (st_hm) lv_obj_invalidate(st_hm);            // the draw callback reads st_cur
 }
 
-static void render_work_page(void) {
-    if (!page_work) return;
-    const uint32_t now = lv_tick_get();
-    const bool preview = preview_until_ms && (int32_t)(preview_until_ms - now) > 0;
-    if (preview) {
-        lv_label_set_text(lbl_work_state, "Claude needs you");
-    } else if (!cc_seen) {
-        lv_label_set_text(lbl_work_state, "Not set up yet");
-    } else if (cc_cur.state == CC_NONE || cc_cur.sessions == 0) {
-        lv_label_set_text(lbl_work_state, "No live session");
-    } else if (cc_cur.label[0]) {
-        lv_label_set_text(lbl_work_state, cc_cur.label);
-    } else {
-        lv_label_set_text(lbl_work_state, work_title());
-    }
-    render_work_sub();
-    work_sub_refresh_ms = now;
-    if (work_pill) {
-        if (!preview && cc_seen && cc_cur.sessions >= 2) {
-            lv_label_set_text_fmt(work_pill, "%d sessions", cc_cur.sessions);
-            lv_obj_clear_flag(work_pill, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(work_pill, LV_OBJ_FLAG_HIDDEN);
+// The heat string is whole weeks, oldest first; show the last st_weeks columns.
+static char heat_cell(int idx) {
+    const int total = L.st_weeks * 7;
+    const int have_days = st_seen ? (int)st_cur.days : 0;
+    if (!have_days) return '0';
+    const int skip = have_days > total ? have_days - total : 0;          // more history than columns: drop the oldest
+    const int pad = have_days < total ? total - have_days : 0;           // less: leading empty cells
+    if (idx < pad) return '0';
+    const int day = idx - pad + skip;
+    return day < have_days ? st_cur.heat[day] : 'x';
+}
+
+// 24 × 7 rounded squares from one draw call each — 168 LVGL objects would eat
+// a third of the C6's pool for a static picture.
+static void heat_draw_cb(lv_event_t* e) {
+    lv_layer_t* layer = lv_event_get_layer(e);
+    lv_obj_t* obj = (lv_obj_t*)lv_event_get_target(e);
+    if (!layer || !obj) return;
+    lv_area_t o;
+    lv_obj_get_coords(obj, &o);
+    lv_draw_fill_dsc_t d;
+    lv_draw_fill_dsc_init(&d);
+    d.radius = L.st_cell >= 10 ? 3 : 1;
+    d.opa = LV_OPA_COVER;
+    const int step = L.st_cell + L.st_cell_gap;
+    int idx = 0;
+    for (int c = 0; c < L.st_weeks; c++) {
+        for (int r = 0; r < 7; r++, idx++) {
+            const char ch = heat_cell(idx);
+            if (ch == 'x') continue;
+            d.color = heat_color(ch);
+            lv_area_t a = { o.x1 + c * step, o.y1 + r * step, o.x1 + c * step + L.st_cell - 1, o.y1 + r * step + L.st_cell - 1 };
+            lv_draw_fill(layer, &d, &a);
         }
     }
-    apply_work_actor();
-    if (current_screen == SCREEN_USAGE && title_level_page == LEVEL_WORK) render_title(true);
 }
 
-static void build_work_page(lv_obj_t* page) {
-    work_actor = splash_actor_create(page, WORK_ACTS, (int)(sizeof(WORK_ACTS) / sizeof(WORK_ACTS[0])), L.work_cell);
-    if (work_actor) {
-        lv_obj_set_pos(work_actor, (L.scr_w - splash_actor_width()) / 2, L.work_feet_y - splash_actor_height());
-        lv_obj_add_flag(work_actor, LV_OBJ_FLAG_EVENT_BUBBLE);
+static void build_stats_page(lv_obj_t* page) {
+    const int tile_w = (L.content_w - 3 * L.st_gap) / 4;
+    for (int i = 0; i < ST_TILES; i++) {
+        const int col = i % 4, row = i / 4;
+        lv_obj_t* t = make_tile(page, L.margin + col * (tile_w + L.st_gap), row * (L.st_tile_h + L.st_gap),
+                                tile_w, L.st_tile_h, false);
+        lv_obj_set_style_pad_left(t, 8, 0);
+        lv_obj_set_style_pad_right(t, 8, 0);
+        lv_obj_set_style_pad_top(t, 10, 0);
+        lv_obj_set_style_pad_bottom(t, 10, 0);
+        lv_obj_t* l = lv_label_create(t);
+        lv_label_set_text(l, ST_LABELS[i]);
+        lv_obj_set_style_text_font(l, L.st_label_font, 0);
+        lv_obj_set_style_text_color(l, COL_DIM, 0);
+        lv_obj_set_width(l, tile_w - 16);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
+        st_value[i] = lv_label_create(t);
+        lv_label_set_text(st_value[i], "---");
+        lv_obj_set_style_text_font(st_value[i], L.st_value_font, 0);
+        lv_obj_set_style_text_color(st_value[i], COL_TEXT, 0);
+        lv_obj_set_width(st_value[i], tile_w - 16);
+        lv_label_set_long_mode(st_value[i], LV_LABEL_LONG_CLIP);
+        lv_obj_align(st_value[i], LV_ALIGN_BOTTOM_LEFT, 0, 0);
     }
-    lbl_work_state = lv_label_create(page);
-    lv_label_set_text(lbl_work_state, "");
-    lv_obj_set_style_text_font(lbl_work_state, L.work_font, 0);
-    lv_obj_set_style_text_color(lbl_work_state, COL_TEXT, 0);
-    lv_obj_set_style_text_align(lbl_work_state, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_work_state, L.content_w);
-    lv_label_set_long_mode(lbl_work_state, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(lbl_work_state, L.margin, L.work_label_y);
-
-    lbl_work_sub = lv_label_create(page);
-    lv_label_set_text(lbl_work_sub, "");
-    lv_obj_set_style_text_font(lbl_work_sub, L.work_sub_font, 0);
-    lv_obj_set_style_text_color(lbl_work_sub, COL_DIM, 0);
-    lv_obj_set_style_text_align(lbl_work_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_work_sub, L.content_w);
-    lv_obj_set_pos(lbl_work_sub, L.margin, L.work_sub_y);
-
-    work_pill = make_pill_styled(page, "", L.pill_font, L.pill_pad_x, L.pill_pad_y);
-    lv_obj_align(work_pill, LV_ALIGN_TOP_RIGHT, -L.margin, 1);
-    lv_obj_add_flag(work_pill, LV_OBJ_FLAG_HIDDEN);
-    render_work_page();
-}
-
-// ---- Trend page ----
-static void render_trend_page(void) {
-    if (!page_trend) return;
-    const int inner_w = L.content_w - 2 * L.panel_pad_x;
-    // 24 h line: hourly maxima of the session window; gaps draw as zero, an
-    // empty history shows the hint instead of a flat line.
-    bool any = false; int last = -1;
-    for (int i = 0; i < TREND_HOURS; i++)
-        if (tr_seen && tr_cur.hours[i] >= 0) { any = true; last = tr_cur.hours[i]; }
-    if (any) {
-        for (int i = 0; i < TREND_HOURS; i++) {
-            int v = tr_cur.hours[i] < 0 ? 0 : tr_cur.hours[i];
-            tr_pts[i].x = (lv_value_precise_t)(i * inner_w / (TREND_HOURS - 1));
-            tr_pts[i].y = (lv_value_precise_t)(L.tr_chart_top + L.tr_chart_h - v * L.tr_chart_h / 100);
-        }
-        lv_line_set_points(tr_line, tr_pts, TREND_HOURS);
-        lv_obj_clear_flag(tr_line, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(tr_dot, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(tr_dot, (int)tr_pts[TREND_HOURS - 1].x - L.dot_size / 2 - 1,
-                       (int)tr_pts[TREND_HOURS - 1].y - L.dot_size / 2 - 1);
-        lv_label_set_text_fmt(lbl_tr_hour, "%d%%", last);
-        lv_obj_add_flag(lbl_tr_empty1, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(tr_line, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(tr_dot, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(lbl_tr_hour, "---%");
-        lv_obj_clear_flag(lbl_tr_empty1, LV_OBJ_FLAG_HIDDEN);
-    }
-    // Week bars: daily weekly-quota use, scaled to the busiest day.
-    int maxd = 1; bool anyd = false;
-    for (int i = 0; i < TREND_DAYS; i++) {
-        if (!tr_seen) break;
-        if (tr_cur.days[i] > maxd) maxd = tr_cur.days[i];
-        if (tr_cur.days[i] >= 0) anyd = true;
-    }
-    const int bar_w = (inner_w - (TREND_DAYS - 1) * L.tr_bar_gap) / TREND_DAYS;
-    const int bars_top = L.tr_chart_top;
-    int wday_today = -1;
-    if (clock_base_epoch > 0) {
-        time_t cur = (time_t)(clock_base_epoch + (lv_tick_get() - clock_base_ms) / 1000);
-        struct tm tmv;
-        gmtime_r(&cur, &tmv);
-        wday_today = tmv.tm_wday;
-    }
-    for (int i = 0; i < TREND_DAYS; i++) {
-        const int v = tr_seen ? tr_cur.days[i] : -1;
-        int h = v <= 0 ? 3 : v * L.tr_bars_h / maxd;
-        if (h < 3) h = 3;
-        lv_obj_set_size(tr_bars[i], bar_w, h);
-        lv_obj_set_pos(tr_bars[i], i * (bar_w + L.tr_bar_gap), bars_top + L.tr_bars_h - h);
-        const bool today = (i == TREND_DAYS - 1);
-        lv_obj_set_style_bg_color(tr_bars[i], today ? COL_ACCENT : (v < 0 ? COL_BAR_BG : COL_DOT_OFF), 0);
-        if (wday_today >= 0) {
-            static const char* const DAYS = "SMTWTFS";
-            const int wd = (wday_today - (TREND_DAYS - 1 - i) + 7) % 7;
-            lv_label_set_text_fmt(tr_day_lbl[i], "%c", DAYS[wd]);
-        } else {
-            lv_label_set_text(tr_day_lbl[i], today ? "T" : "-");
-        }
-        lv_obj_set_style_text_color(tr_day_lbl[i], today ? COL_TEXT : COL_DIM, 0);
-        lv_obj_align_to(tr_day_lbl[i], tr_bars[i], LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
-    }
-    if (anyd && tr_cur.days[TREND_DAYS - 1] >= 0) lv_label_set_text_fmt(lbl_tr_day, "%d%%", tr_cur.days[TREND_DAYS - 1]);
-    else                                            lv_label_set_text(lbl_tr_day, "---%");
-    if (anyd) lv_obj_add_flag(lbl_tr_empty2, LV_OBJ_FLAG_HIDDEN);
-    else      lv_obj_clear_flag(lbl_tr_empty2, LV_OBJ_FLAG_HIDDEN);
-}
-
-static lv_obj_t* trend_big_label(lv_obj_t* panel) {
-    lv_obj_t* l = lv_label_create(panel);
-    lv_label_set_text(l, "---%");
-    lv_obj_set_style_text_font(l, L.pct_font, 0);
-    lv_obj_set_style_text_color(l, COL_TEXT, 0);
-    lv_obj_set_pos(l, 0, 0);
-    return l;
-}
-
-static lv_obj_t* trend_empty_label(lv_obj_t* panel, int y) {
-    lv_obj_t* l = lv_label_create(panel);
-    lv_label_set_text(l, "No history yet");
-    lv_obj_set_style_text_font(l, L.reset_font, 0);
-    lv_obj_set_style_text_color(l, COL_DIM, 0);
-    lv_obj_set_pos(l, 0, y);
-    return l;
-}
-
-static void build_trend_page(lv_obj_t* page) {
-    const int inner_w = L.content_w - 2 * L.panel_pad_x;
-    // Card 1 — the last 24 hours of the session window.
-    lv_obj_t* c1 = make_panel(page, L.margin, 0, L.content_w, L.usage_panel_h);
-    lbl_tr_hour = trend_big_label(c1);
-    lv_obj_t* pill1 = make_pill(c1, "24 hours");
-    lv_obj_align(pill1, LV_ALIGN_TOP_RIGHT, 0, 1);
-    lv_obj_t* base1 = lv_obj_create(c1);          // baseline, in the bar-track colour
-    lv_obj_set_pos(base1, 0, L.tr_chart_top + L.tr_chart_h);
-    lv_obj_set_size(base1, inner_w, 2);
-    lv_obj_set_style_bg_color(base1, COL_BAR_BG, 0);
-    lv_obj_set_style_bg_opa(base1, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(base1, 0, 0);
-    lv_obj_set_style_radius(base1, 1, 0);
-    lv_obj_clear_flag(base1, LV_OBJ_FLAG_CLICKABLE);
-    tr_line = lv_line_create(c1);
-    lv_obj_set_pos(tr_line, 0, 0);
-    lv_obj_set_size(tr_line, inner_w, L.tr_chart_top + L.tr_chart_h + 2);
-    lv_obj_set_style_line_width(tr_line, 3, 0);
-    lv_obj_set_style_line_color(tr_line, COL_ACCENT, 0);
-    lv_obj_set_style_line_rounded(tr_line, true, 0);
-    lv_obj_clear_flag(tr_line, LV_OBJ_FLAG_CLICKABLE);
-    tr_dot = make_dot(c1);
-    lv_obj_set_size(tr_dot, L.dot_size + 2, L.dot_size + 2);
-    lv_obj_set_style_bg_color(tr_dot, COL_TEXT, 0);
-    lbl_tr_empty1 = trend_empty_label(c1, L.usage_reset_y);
-
-    // Card 2 — daily weekly-quota use over the last seven days.
-    lv_obj_t* c2 = make_panel(page, L.margin, L.usage_panel_h + L.usage_panel_gap, L.content_w, L.usage_panel_h);
-    lbl_tr_day = trend_big_label(c2);
-    lv_obj_t* pill2 = make_pill(c2, "Daily use");
-    lv_obj_align(pill2, LV_ALIGN_TOP_RIGHT, 0, 1);
-    for (int i = 0; i < TREND_DAYS; i++) {
-        tr_bars[i] = lv_obj_create(c2);
-        lv_obj_set_style_radius(tr_bars[i], 4, 0);
-        lv_obj_set_style_border_width(tr_bars[i], 0, 0);
-        lv_obj_set_style_pad_all(tr_bars[i], 0, 0);
-        lv_obj_set_style_bg_opa(tr_bars[i], LV_OPA_COVER, 0);
-        lv_obj_clear_flag(tr_bars[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(tr_bars[i], LV_OBJ_FLAG_SCROLLABLE);
-        tr_day_lbl[i] = lv_label_create(c2);
-        lv_label_set_text(tr_day_lbl[i], "");
-        lv_obj_set_style_text_font(tr_day_lbl[i], L.tr_day_font, 0);
-        lv_obj_set_style_text_color(tr_day_lbl[i], COL_DIM, 0);
-    }
-    lbl_tr_empty2 = trend_empty_label(c2, L.usage_reset_y);
-    render_trend_page();
+    // Heatmap: st_weeks columns × 7 rows, centred, painted by heat_draw_cb.
+    const int cols = L.st_weeks;
+    const int hm_w = cols * L.st_cell + (cols - 1) * L.st_cell_gap;
+    const int hm_h = 7 * L.st_cell + 6 * L.st_cell_gap;
+    st_hm = make_group_sized(page, (L.scr_w - hm_w) / 2, L.st_hm_y, hm_w, hm_h);
+    lv_obj_clear_flag(st_hm, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(st_hm, heat_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    render_stats_page();
 }
 
 // ---- Level page dots: visible only around a horizontal gesture ----
@@ -1400,14 +1215,12 @@ static void level_dots_fade(void) {
 }
 
 static void init_usage_screen(void) {
-    // The level: three pages side by side, plus the ticker and dots.
+    // The level: two pages side by side, plus the ticker and dots.
     level = make_body_group(body);
-    page_work = make_body_group(level);
+    page_stats = make_body_group(level);
     usage_container = make_body_group(level);
-    page_trend = make_body_group(level);
-    level_pages[LEVEL_WORK] = page_work;
+    level_pages[LEVEL_STATS] = page_stats;
     level_pages[LEVEL_USAGE] = usage_container;
-    level_pages[LEVEL_TREND] = page_trend;
     for (int i = 0; i < LEVEL_PAGES; i++)
         lv_obj_add_event_cb(level_pages[i], global_click_cb, LV_EVENT_CLICKED, NULL);
 
@@ -1459,8 +1272,7 @@ static void init_usage_screen(void) {
     build_pair_group(usage_container);
     build_idle_group(usage_container);
 
-    build_work_page(page_work);
-    build_trend_page(page_trend);
+    build_stats_page(page_stats);
 
     // Status line — on every level page. Driven by ui_tick_anim(). Fixed width
     // so a long companion label is cut with an ellipsis instead of overflowing.
@@ -1663,7 +1475,7 @@ static void sleep_slider_cb(lv_event_t* e) {
     }
 }
 
-enum ToggleId { TG_BATTERY, TG_MASCOT, TG_STATUS, TG_AUTOSW, TG_GLOW };
+enum ToggleId { TG_BATTERY, TG_MASCOT, TG_STATUS, TG_GLOW };
 static void toggle_tile_cb(lv_event_t* e) {
     if (click_guarded()) return;
     const Settings& s = settings_get();
@@ -1671,7 +1483,6 @@ static void toggle_tile_cb(lv_event_t* e) {
     case TG_BATTERY: settings_set_show_battery(!s.show_battery); break;
     case TG_MASCOT:  settings_set_show_mascot(!s.show_mascot); break;
     case TG_STATUS:  settings_set_show_status(!s.show_status); break;
-    case TG_AUTOSW:  settings_set_auto_switch(!s.auto_switch); break;
     case TG_GLOW:    settings_set_alert_glow(!s.alert_glow); break;
     default: break;
     }
@@ -1853,17 +1664,6 @@ static void volume_slider_cb(lv_event_t* e) {
     }
 }
 
-static void home_slider_cb(lv_event_t* e) {
-    const lv_event_code_t code = lv_event_get_code(e);
-    const int idx = (int)lv_slider_get_value(sl_home);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_label_set_text(lbl_home, settings_home_delay_label((uint8_t)idx));
-        lv_obj_set_style_text_color(lbl_home, idx == HOME_STAY ? COL_DIM : COL_TEXT, 0);
-    } else if (code == LV_EVENT_RELEASED) {
-        settings_set_home_delay((uint8_t)idx);
-    }
-}
-
 static void build_alerts_page(lv_obj_t* page) {
     const int inner_w = L.content_w - 2 * L.tile_pad_x;
 
@@ -1902,36 +1702,22 @@ static void build_alerts_page(lv_obj_t* page) {
     }
     lv_obj_set_pos(chime_hl, chime_x[0], seg_y);
 
+    // Second row: the Volume slider with the Glow toggle beside it.
     const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
-    lv_obj_t* tv = make_tile(page, L.margin, L.wide_tile_h + L.tile_gap, L.content_w, L.slider_tile_h, false);
+    const int glow_w = L.content_w * 3 / 8;
+    const int vol_w = L.content_w - L.tile_gap - glow_w;
+    const int row_y = L.wide_tile_h + L.tile_gap;
+    lv_obj_t* tv = make_tile(page, L.margin, row_y, vol_w, L.slider_tile_h, false);
     tile_label(tv, "Volume");
     lbl_volume = tile_value_label(tv);
-    sl_volume = make_slider(tv, slider_y, inner_w, 0, 100);
+    sl_volume = make_slider(tv, slider_y, vol_w - 2 * L.tile_pad_x, 0, 100);
     lv_obj_add_event_cb(sl_volume, volume_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(sl_volume, volume_slider_cb, LV_EVENT_RELEASED, NULL);
-}
 
-static void build_companion_page(lv_obj_t* page) {
-    const int inner_w = L.content_w - 2 * L.tile_pad_x;
-    const int half_w = (L.content_w - L.tile_gap) / 2;
-
-    lv_obj_t* t1 = make_tile(page, L.margin, 0, half_w, L.wide_tile_h, true);
-    tile_label(t1, "Auto-switch");
-    tg_autosw = make_toggle(t1);
-    lv_obj_add_event_cb(t1, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_AUTOSW);
-
-    lv_obj_t* t2 = make_tile(page, L.margin + half_w + L.tile_gap, 0, half_w, L.wide_tile_h, true);
-    tile_label(t2, "Glow");
-    tg_glow = make_toggle(t2);
-    lv_obj_add_event_cb(t2, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_GLOW);
-
-    const int slider_y = L.slider_tile_h - 2 * L.tile_pad_y - L.slider_knob / 2 - L.slider_h / 2;
-    lv_obj_t* th = make_tile(page, L.margin, L.wide_tile_h + L.tile_gap, L.content_w, L.slider_tile_h, false);
-    tile_label(th, "Back home after");
-    lbl_home = tile_value_label(th);
-    sl_home = make_slider(th, slider_y, inner_w, 0, HOME_MODE_COUNT - 1);
-    lv_obj_add_event_cb(sl_home, home_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_add_event_cb(sl_home, home_slider_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_t* tg = make_tile(page, L.margin + vol_w + L.tile_gap, row_y, glow_w, L.slider_tile_h, true);
+    tile_label(tg, "Glow");
+    tg_glow = make_toggle(tg);
+    lv_obj_add_event_cb(tg, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_GLOW);
 }
 
 static void build_about_page(lv_obj_t* page) {
@@ -2055,13 +1841,10 @@ static void build_settings_screen(void) {
     // ---- Page 2: Weekly card (default face + flip interval) ----
     build_face_page(settings_pages[PAGE_FACE]);
 
-    // ---- Page 3: Alerts (chime picker + Preview, volume) ----
+    // ---- Page 3: Alerts (chime picker + Preview, volume, glow) ----
     build_alerts_page(settings_pages[PAGE_ALERTS]);
 
-    // ---- Page 4: Companion (auto-switch, glow, back home after) ----
-    build_companion_page(settings_pages[PAGE_COMPANION]);
-
-    // ---- Page 5: About ----
+    // ---- Page 4: About ----
     build_about_page(settings_pages[PAGE_ABOUT]);
 
     // Page indicator dots, centred under the tile area.
@@ -2105,17 +1888,11 @@ static void refresh_settings_controls(bool animate) {
     set_toggle(tg_battery, s.show_battery, "Shown", "Hidden", animate);
     set_toggle(tg_mascot, s.show_mascot, "Shown", "Hidden", animate);
     set_toggle(tg_status, s.show_status, "Shown", "Hidden", animate);
-    set_toggle(tg_autosw, s.auto_switch, "On", "Off", animate);
     set_toggle(tg_glow, s.alert_glow, "On", "Off", animate);
     set_chime_segment(s.alert_chime, animate);
     if (sl_volume) {
         lv_slider_set_value(sl_volume, s.volume, animate ? LV_ANIM_ON : LV_ANIM_OFF);
         lv_label_set_text_fmt(lbl_volume, "%d%%", s.volume);
-    }
-    if (sl_home) {
-        lv_slider_set_value(sl_home, s.home_delay, animate ? LV_ANIM_ON : LV_ANIM_OFF);
-        lv_label_set_text(lbl_home, settings_home_delay_label(s.home_delay));
-        lv_obj_set_style_text_color(lbl_home, s.home_delay == HOME_STAY ? COL_DIM : COL_TEXT, 0);
     }
     lv_slider_set_value(sl_brightness, brightness_get_pct(), animate ? LV_ANIM_ON : LV_ANIM_OFF);
     lv_label_set_text_fmt(lbl_brightness, "%d%%", brightness_get_pct());
@@ -2311,7 +2088,7 @@ static void alert_start(int kind) {
     if (chime) sound_hal_play_alert(kind);
     alert_active = true;
     alert_act_idx = 0;
-    if (work_actor) splash_actor_play(ALERT_ACTS[0], false, true);
+    if (header_actor) splash_actor_play(ALERT_ACTS[0], false, true);
 }
 
 static void alert_stop(void) {
@@ -2319,8 +2096,7 @@ static void alert_stop(void) {
     if (glow_obj) lv_obj_add_flag(glow_obj, LV_OBJ_FLAG_HIDDEN);
     if (!alert_active) return;
     alert_active = false;
-    work_actor_state = -1;                          // re-pick the state's animation
-    apply_work_actor();
+    if (header_actor) splash_actor_stop();          // back to the still pose
 }
 
 // ======== Public API ========
@@ -2340,11 +2116,6 @@ void ui_init(void) {
     s_indev = lv_indev_get_next(NULL);
     if (s_indev) lv_indev_add_event_cb(s_indev, indev_cb, LV_EVENT_ALL, NULL);
 
-#ifndef BOARD_HAS_PSRAM
-    // Static corner mascot (see clawd_still.h) — the animated one needs PSRAM.
-    if (L.small_icons) init_icon_dsc_rgb565a8(&logo_dsc, CLAWD_STILL_SMALL_W, CLAWD_STILL_SMALL_H, clawd_still_small_data);
-    else               init_icon_dsc_rgb565a8(&logo_dsc, CLAWD_STILL_W, CLAWD_STILL_H, clawd_still_data);
-#endif
     // Body viewport (clips the sliding surfaces), then the surfaces, then the
     // shared header title above them.
     body = make_group_sized(scr, 0, L.content_y, L.scr_w, L.body_h);
@@ -2375,9 +2146,15 @@ void ui_init(void) {
         // Animated: idles, does acts, and takes walk-off/lurk trips.
         splash_mascot_create(scr, L.margin, top + art_h, L.small_icons ? 2 : 3);
 #else
-        logo_img = lv_image_create(scr);
-        lv_image_set_src(logo_img, &logo_dsc);
-        lv_obj_set_pos(logo_img, L.margin, top);
+        // No PSRAM: a small actor canvas — the still pose, and the alert acts
+        // (jump, wave, point) while Claude needs you. Feet on the slot's bottom.
+        header_actor = splash_actor_create(scr, HEADER_ACTS, (int)(sizeof(HEADER_ACTS) / sizeof(HEADER_ACTS[0])), L.mascot_cell);
+        if (header_actor) {
+            const int feet = top + art_h + 4;
+            lv_obj_set_pos(header_actor, L.margin, feet - splash_actor_height());
+            lv_obj_clear_flag(header_actor, LV_OBJ_FLAG_CLICKABLE);
+        }
+        logo_img = header_actor;
 #endif
     }
 
@@ -2578,10 +2355,8 @@ static void render_title(bool force) {
     char want[24];
     if (title_screen == SCREEN_SETTINGS) {
         strlcpy(want, "Settings", sizeof(want));
-    } else if (title_level_page == LEVEL_WORK) {
-        strlcpy(want, work_title(), sizeof(want));
-    } else if (title_level_page == LEVEL_TREND) {
-        strlcpy(want, "Trend", sizeof(want));
+    } else if (title_level_page == LEVEL_STATS) {
+        strlcpy(want, "Stats", sizeof(want));
     } else {
         const uint8_t mode = settings_get().clock;
         if (mode == CLOCK_OFF || clock_base_epoch == 0) {
@@ -2663,37 +2438,15 @@ void ui_tick_anim(void) {
         level_dots_hide_ms = 0;
         level_dots_fade();
     }
-    // A programmatic page change that waited for a finger / snap to finish.
-    if (pending_level_target >= 0 && !drag_tracking && !transitioning && current_screen == SCREEN_USAGE) {
-        const int t = pending_level_target;
-        pending_level_target = -1;
-        if (t != level_page) auto_slide_level(t);
-    }
     // The Preview alert ends by itself.
     if (preview_until_ms && (int32_t)(now - preview_until_ms) >= 0) {
         preview_until_ms = 0;
         if (!(cc_seen && cc_is_attention(cc_cur.state))) alert_stop();
-        work_actor_state = -1;
-        render_work_page();
     }
-    // Working page: the elapsed counter ticks while on show; an alert cycles
-    // the exuberant acts back to back.
-    if (current_screen == SCREEN_USAGE && level_page == LEVEL_WORK && now - work_sub_refresh_ms >= 1000) {
-        work_sub_refresh_ms = now;
-        render_work_sub();
-    }
-    if (alert_active && work_actor && splash_actor_is_idle()) {
+    // An alert cycles the header mascot's exuberant acts back to back.
+    if (alert_active && header_actor && splash_actor_is_idle()) {
         alert_act_idx = (uint8_t)((alert_act_idx + 1) % (sizeof(ALERT_ACTS) / sizeof(ALERT_ACTS[0])));
         splash_actor_play(ALERT_ACTS[alert_act_idx], false, true);
-    }
-    // Back home once Claude has been quiet for a while after an auto-switch.
-    if (home_due_ms && (int32_t)(now - home_due_ms) >= 0) {
-        home_due_ms = 0;
-        if (auto_arrived && current_screen == SCREEN_USAGE && level_page == LEVEL_WORK && !alert_active) {
-            auto_arrived = false;
-            if (!drag_tracking && !transitioning) auto_slide_level(LEVEL_USAGE);
-            else                                  pending_level_target = LEVEL_USAGE;
-        }
     }
 
     if (current_screen == SCREEN_SETTINGS) {
@@ -2816,8 +2569,6 @@ static void global_click_cb(lv_event_t* e) {
     if (alert_active || preview_until_ms) {          // a tap acknowledges the alert
         preview_until_ms = 0;
         alert_stop();
-        work_actor_state = -1;
-        render_work_page();
         return;
     }
     if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
@@ -2888,11 +2639,7 @@ static void drag_anim_done(lv_anim_t* a) {
             if (to_settings) preview_last_refresh_ms = lv_tick_get();
             apply_header_visibility();
         } else if (current_screen == SCREEN_USAGE) {
-            // Level paging. A finger that leaves the Working page (or arrives
-            // there by choice) ends the auto-switch bookkeeping.
-            if (!slide_programmatic) { auto_arrived = false; home_due_ms = 0; }
-            slide_programmatic = false;
-            show_level_page(drag_target_page);      // re-parks the third page too
+            show_level_page(drag_target_page);      // level paging
         } else {
             settings_page = drag_target_page;
             update_page_dots();
@@ -2902,7 +2649,6 @@ static void drag_anim_done(lv_anim_t* a) {
             }
         }
     }
-    slide_programmatic = false;
     drag_out = drag_in = nullptr;
     transitioning = false;
     // Title settles on the page that is now on show, fully opaque.
@@ -2910,28 +2656,6 @@ static void drag_anim_done(lv_anim_t* a) {
     title_level_page = level_page;
     lv_obj_set_style_text_opa(lbl_title, LV_OPA_COVER, 0);
     render_title(true);
-}
-
-// Slide the usage level to `target` as if a finger had flicked it. Waits for a
-// live gesture or snap to finish (the tick retries) so it never fights the user.
-static void auto_slide_level(int target) {
-    if (target < 0 || target >= LEVEL_PAGES || current_screen != SCREEN_USAGE) return;
-    if (target == level_page) return;
-    if (drag_tracking || transitioning) { pending_level_target = target; return; }
-    settle_slides();
-    drag_vertical = false;
-    drag_span = L.scr_w;
-    drag_sign = target > level_page ? +1 : -1;
-    drag_out = level_pages[level_page];
-    drag_in = level_pages[target];
-    drag_target_page = target;
-    // Park the arriving page exactly one span away on the right side (it may
-    // sit two pages over).
-    lv_obj_set_x(drag_in, drag_sign * L.scr_w);
-    slide_programmatic = true;
-    level_dots_show();
-    set_drag_offset(0);
-    snap_drag_ms(true, 340);
 }
 
 // Snap the usage level to `page` (finger-driven moves go through the swipe
@@ -2943,8 +2667,7 @@ static void show_level_page(int page) {
     update_level_dots();
     for (int i = 0; i < LEVEL_PAGES; i++)
         lv_obj_set_x(level_pages[i], i < page ? -L.scr_w : i > page ? L.scr_w : 0);
-    if (page == LEVEL_TREND) render_trend_page();
-    else if (page == LEVEL_WORK) render_work_page();
+    if (page == LEVEL_STATS) render_stats_page();
     if (current_screen == SCREEN_USAGE) {
         title_level_page = level_page;
         render_title(true);
@@ -2995,7 +2718,7 @@ static void begin_drag(int32_t dx, int32_t dy) {
                 drag_target_page = target;
                 drag_in = settings_pages[target];      // already parked one width away
             }
-        } else {                                        // usage level: Working ◂ Usage ▸ Trend
+        } else {                                        // usage level: Stats ◂ Usage
             drag_out = level_pages[level_page];
             const int target = level_page + drag_sign;
             if (target >= 0 && target < LEVEL_PAGES) {
@@ -3195,69 +2918,34 @@ void ui_update_battery(int percent, bool charging) {
     refresh_battery_glyph();
 }
 
-// ======== Companion / Trend ========
-
-// Move the user to the Working page because Claude's state warrants it. From
-// Settings only a `force`d (needs-you) alert pulls them out; the slide home
-// runs first and the tick finishes the horizontal move.
-static void goto_working_page(bool force) {
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(SCREEN_USAGE);   // the splash is a hard cut anyway
-    if (current_screen == SCREEN_SETTINGS) {
-        if (!force) return;
-        auto_arrived = true;
-        pending_level_target = LEVEL_WORK;
-        if (!transitioning && !drag_tracking) ui_debug_swipe(-1, 0);
-        return;
-    }
-    if (level_page == LEVEL_WORK) return;
-    auto_arrived = true;
-    auto_slide_level(LEVEL_WORK);
-}
+// ======== Companion / Stats ========
 
 void ui_companion_update(const CompanionData* cc) {
     if (!cc || !cc->present) return;
     const uint32_t now = lv_tick_get();
     const uint8_t prev = cc_seen ? cc_cur.state : (uint8_t)CC_NONE;
-    const bool was_attention = cc_seen && cc_is_attention(prev);
-    const bool was_working   = cc_seen && cc_is_working(prev);
+    const bool was_attention = cc_seen && cc_is_attention(prev) && cc_cur.sessions > 0;
     cc_cur = *cc;
     cc_at_ms = now;
     cc_seen = true;
-    const Settings& s = settings_get();
     const uint8_t st = cc_cur.state;
     const bool attention = cc_is_attention(st) && cc_cur.sessions > 0;
-    const bool working   = cc_is_working(st) && cc_cur.sessions > 0;
-
+    // Claude needs you (or finished a long turn): glow, chime, the mascot jumps
+    // and waves — until you tap, or the state moves on. Everything else shows
+    // in the ticker only (see ui_tick_anim).
     if (attention && !was_attention) {
         preview_until_ms = 0;
         alert_start(st == CC_ATTENTION ? 0 : 1);
-        goto_working_page(true);
-        home_due_ms = 0;
-    } else if (!attention && alert_active) {
+    } else if (!attention && alert_active && !preview_until_ms) {
         alert_stop();
     }
-    if (working && !was_working && !attention && s.auto_switch) {
-        goto_working_page(false);
-        home_due_ms = 0;
-    }
-    if (auto_arrived) {
-        // Once Claude is quiet the page returns home by itself after the user's
-        // "Back home after" delay (Stay = never); with nothing left to show it
-        // goes sooner.
-        const uint32_t d = settings_home_delay_ms();
-        if (d == 0)                                                       home_due_ms = 0;
-        else if (st == CC_NONE || st == CC_IDLE || cc_cur.sessions == 0) home_due_ms = now + (d < 8000 ? d : 8000);
-        else if (st == CC_DONE || st == CC_TURN_DONE || st == CC_ERROR)  home_due_ms = now + d;
-        else                                                              home_due_ms = 0;
-    }
-    render_work_page();
 }
 
-void ui_trend_update(const TrendData* tr) {
-    if (!tr || !tr->present) return;
-    tr_cur = *tr;
-    tr_seen = true;
-    render_trend_page();
+void ui_stats_update(const StatsData* st) {
+    if (!st || !st->present) return;
+    st_cur = *st;
+    st_seen = true;
+    render_stats_page();
 }
 
 void ui_show_level_page(int page) {
@@ -3267,14 +2955,6 @@ void ui_show_level_page(int page) {
 
 void ui_preview_alert(void) {
     preview_until_ms = lv_tick_get() + 6000;
-    alert_start(0);                                  // glow + chime right away, during the slide
-    if (current_screen == SCREEN_SETTINGS) {
-        pending_level_target = LEVEL_WORK;
-        if (!transitioning && !drag_tracking) ui_debug_swipe(-1, 0);
-    } else {
-        if (current_screen == SCREEN_SPLASH) ui_show_screen(SCREEN_USAGE);
-        auto_slide_level(LEVEL_WORK);
-    }
-    render_work_page();
+    alert_start(0);
 }
 

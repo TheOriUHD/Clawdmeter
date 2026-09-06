@@ -297,6 +297,7 @@ static void blit_cells(const uint8_t* cells, const uint16_t* palette,
         for (int dy = 1; dy < spc; dy++)             // replicate that row down
             memcpy(&strip_buf[dy * bw], strip_buf, bw * 2);
         display_hal_draw_bitmap(px, scr_offy + gy * spc, bw, spc, strip_buf);
+        display_hal_wait();                          // one buffer: the burst must land before the next row overwrites it
     }
 }
 
