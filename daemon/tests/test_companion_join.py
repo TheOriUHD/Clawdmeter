@@ -58,11 +58,12 @@ def test_rejections_joins_and_first_contact_are_logged(monkeypatch):
         assert st == 401
         rej = [l for l in logs if "rejected a hook from aivm" in l]
         assert len(rej) == 1 and "companion link" in rej[0]
-        # The installer's hello: logged, nothing ingested.
+        # The installer's hello: logged with address and user, nothing ingested.
         st, _ = await _http(port, "POST", "/hook", {"hook_event_name": "ClawdmeterJoin"},
-                            {"X-Clawdmeter-Host": "aivm", "X-Clawdmeter-Token": "sekret"})
+                            {"X-Clawdmeter-Host": "aivm", "X-Clawdmeter-User": "philipp", "X-Clawdmeter-Token": "sekret"})
         assert st == 200 and not c.sessions
-        assert any("aivm joined" in l for l in logs)
+        joined = [l for l in logs if "aivm (127.0.0.1) joined" in l]
+        assert len(joined) == 1 and "for user philipp" in joined[0]
         # First real hook from that machine: logged once, with the address.
         for _ in range(2):
             st, _ = await _http(port, "POST", "/hook", ev("UserPromptSubmit"),
@@ -113,6 +114,7 @@ def test_hook_line_takes_bridge_and_token_from_the_environment(monkeypatch):
 def test_installers_say_hello_and_join_text_explains_roles():
     sh = cc.render_install_sh("http://192.168.20.165:47393", "tok")
     assert "ClawdmeterJoin" in sh and "X-Clawdmeter-Token: tok" in sh and "did not answer" in sh
+    assert "X-Clawdmeter-User" in sh and "run this line as that user" in sh
     assert subprocess.run(["/bin/sh", "-n"], input=sh, capture_output=True, text=True).returncode == 0
     ps1 = cc.render_install_ps1("http://192.168.20.165:47393", "tok")
     assert "ClawdmeterJoin" in ps1 and "Invoke-WebRequest" in ps1
@@ -127,3 +129,28 @@ def test_tailscale_range_and_interface_scan():
     assert isinstance(addrs, list) and all(a.count(".") == 3 for a in addrs)
     if any(cc.is_cgnat(a) for a in addrs):
         assert any(cc.is_cgnat(a) for a in cc.local_addresses())
+
+
+def test_join_without_a_following_hook_is_called_out(monkeypatch):
+    monkeypatch.setattr(cc, "_is_loopback", lambda addr: False)
+    monkeypatch.setattr(cc, "JOIN_REMINDER_S", 0.2)
+    logs = []
+
+    async def run():
+        c = cc.Companion()
+        port = _free_port()
+        server = await cc.start_companion_server(c, lambda: None, "127.0.0.1", port, log=logs.append, token="sekret")
+        hdr = {"X-Clawdmeter-Host": "gpuserverph", "X-Clawdmeter-User": "philipp", "X-Clawdmeter-Token": "sekret"}
+        await _http(port, "POST", "/hook", {"hook_event_name": "ClawdmeterJoin"}, hdr)
+        # A second machine joins and does send a hook: no reminder for it.
+        hdr2 = {"X-Clawdmeter-Host": "devbox", "X-Clawdmeter-User": "me", "X-Clawdmeter-Token": "sekret"}
+        await _http(port, "POST", "/hook", {"hook_event_name": "ClawdmeterJoin"}, hdr2)
+        await _http(port, "POST", "/hook", ev("UserPromptSubmit"), hdr2)
+        await asyncio.sleep(1.6)
+        reminders = [l for l in logs if "no hook has arrived" in l]
+        assert len(reminders) == 1 and reminders[0].startswith("Companion: gpuserverph joined") and "user philipp" in reminders[0]
+        assert "root" in reminders[0]
+        server.close()
+        await server.wait_closed()
+
+    asyncio.run(run())

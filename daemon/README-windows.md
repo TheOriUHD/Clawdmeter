@@ -252,9 +252,11 @@ other machine — `curl -fsSL http://<pc>:47393/install/<token> | sh` on
 Linux/macOS, `irm http://<pc>:47393/install.ps1/<token> | iex` on another
 Windows box. The installer comes from the daemon itself with the address and
 token baked in; the other machine needs nothing else (no daemon there). It
-pings this PC when done, and the daemon log then shows `<host> joined`, later
-`first hook from <host>`; a hook arriving without the token is logged as
-`rejected a hook from <host>`. Windows Defender Firewall asks once whether
+pings this PC when done, and the daemon log then shows `<host> joined` with
+the user it installed for (run the line as the user Claude Code runs as — root
+for a root SSH session), later `first hook from <host>`; a hook arriving without
+the token is logged as `rejected a hook from <host>`, and a join with no hook
+after ten minutes gets a reminder. Windows Defender Firewall asks once whether
 Python may accept incoming connections — allow it on private networks, or the
 join fails.
 
