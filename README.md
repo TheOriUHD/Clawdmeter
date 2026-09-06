@@ -67,6 +67,9 @@ makes the device more functional while keeping its design language intact:
   **status line stops making words up** and says what Claude is actually doing
   (`Editing ui.cpp…`, `Bash: pio run…`, `Your turn…`); the whimsical spinner
   words stay for plain thinking — they are Claude Code's own. When a session
+  on another machine holds the line, its host name sits above it as a small
+  dim caption, and two equally busy sessions take turns every eight seconds
+  instead of flipping on every event; a session that needs you always wins. When a session
   is waiting for you the line turns into a calm green **Ready** with a
   breathing dot; with no session open anywhere it reads a dim **Idle**.
 - **"Needs you" alerts.** A permission prompt, a question, a plan to approve

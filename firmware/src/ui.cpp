@@ -55,6 +55,7 @@ struct Layout {
     const lv_font_t* reset_font;     // "Resets in ..." line
     const lv_font_t* pace_font;      // enterprise "Under/On/Over pace" line
     const lv_font_t* anim_font;      // animated status line
+    const lv_font_t* host_font;      // caption above the status line: a remote session's machine
     int16_t anim_y;                  // status line offset from bottom
     bool    small_icons;             // 40px logo + 24px battery (vs 80/48) on small screens
     int16_t title_nudge;             // title x-shift balancing the corner logo
@@ -142,6 +143,7 @@ static void compute_layout(const BoardCaps& c) {
     L.reset_font   = &font_styrene_28;
     L.pace_font    = &font_styrene_16;
     L.anim_font    = &font_mono_32;
+    L.host_font    = &font_styrene_16;
     L.anim_y = -15;
     L.small_icons = false;
     L.title_nudge = 16;
@@ -268,6 +270,7 @@ static void compute_layout(const BoardCaps& c) {
         L.reset_font   = &font_styrene_14;
         L.pace_font    = &font_styrene_12;
         L.anim_font    = &font_mono_18;
+        L.host_font    = &font_styrene_12;
         // Center the status line in the strip below the weekly panel; flush
         // against the bottom edge it reads as unevenly spaced.
         L.anim_y = -10;
@@ -386,6 +389,7 @@ static lv_obj_t* lbl_anim;      // status line: connection state + whimsical idl
 // "Ready" (a session is open, waiting for you): no spinner, no ellipsis — a
 // calm green line with a breathing green dot in front of it.
 static lv_obj_t* ready_dot = nullptr;
+static lv_obj_t* lbl_host = nullptr;            // caption above the ticker: the remote machine on the line
 // The ticker's three styles: whimsical (accent word, spinner glyph, ellipsis —
 // no companion, or a state worth narrating), Ready (green word, breathing green
 // dot: a session is waiting for you) and Idle (dim word, still dim dot: the
@@ -1289,6 +1293,20 @@ static void init_usage_screen(void) {
     lv_obj_set_size(lbl_anim, L.content_w, lv_font_get_line_height(L.anim_font) + 2);
     lv_label_set_long_mode(lbl_anim, LV_LABEL_LONG_DOT);
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, L.anim_y);
+
+    // The machine a remote session runs on — a small dim caption right above
+    // the status line, only while such a session holds it (see ui_tick_anim).
+    // The line itself stays for what Claude is doing: at 32 px mono it holds
+    // about 22 characters, a host prefix would leave nothing of the label.
+    lbl_host = lv_label_create(level);
+    lv_label_set_text(lbl_host, "");
+    lv_obj_set_style_text_font(lbl_host, L.host_font, 0);
+    lv_obj_set_style_text_color(lbl_host, COL_DIM, 0);
+    lv_obj_set_style_text_align(lbl_host, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_size(lbl_host, L.content_w, lv_font_get_line_height(L.host_font) + 2);
+    lv_label_set_long_mode(lbl_host, LV_LABEL_LONG_DOT);
+    lv_obj_align(lbl_host, LV_ALIGN_BOTTOM_MID, 0, L.anim_y - lv_font_get_line_height(L.anim_font) - 1);
+    lv_obj_add_flag(lbl_host, LV_OBJ_FLAG_HIDDEN);
 
     ready_dot = make_dot(level);
     lv_obj_set_size(ready_dot, L.dot_size + 4, L.dot_size + 4);
@@ -2509,6 +2527,16 @@ void ui_tick_anim(void) {
     const bool cc_known = cc_seen && now - cc_at_ms < CC_LIVE_MS;
     const bool cc_live = cc_known && cc_cur.sessions > 0 && cc_cur.state != CC_NONE;
     const bool settled = s_ble_connected && now - connected_at_ms >= 5000;
+    // A session on another machine holds the line: name the machine above it.
+    if (lbl_host) {
+        const char* host = (settled && cc_live && cc_cur.host[0] && settings_get().show_status) ? cc_cur.host : "";
+        if (host[0]) {
+            if (strcmp(lv_label_get_text(lbl_host), host) != 0) lv_label_set_text(lbl_host, host);
+            lv_obj_clear_flag(lbl_host, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(lbl_host, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     if (settled && cc_live && cc_cur.state == CC_IDLE) {
         set_ticker_mode(TICKER_READY);
         return;
@@ -2541,7 +2569,7 @@ void ui_tick_anim(void) {
         case CC_TOOL:       text = cc_cur.label[0] ? cc_cur.label : "Working"; break;
         case CC_DONE:
         case CC_TURN_DONE:  text = "Your turn"; break;
-        case CC_ATTENTION:  text = "Needs you"; break;
+        case CC_ATTENTION:  text = cc_cur.label[0] ? cc_cur.label : "Needs you"; break;   // "Permission: Bash", "Plan to approve"
         case CC_ERROR:      text = "Error"; break;
         case CC_COMPACTING: text = "Compacting"; break;
         default:            text = anim_messages[anim_msg_idx]; break;
@@ -2550,7 +2578,8 @@ void ui_tick_anim(void) {
         text = anim_messages[anim_msg_idx];
     }
 
-    // All states share the whimsical style: "<glyph> <Title-case word>…"
+    // All states share the whimsical style: "<glyph> <Title-case word>…" (the
+    // machine a remote session runs on is the small caption above, see lbl_host).
     static char buf[80];
     snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
              spinner_frames[anim_spinner_idx], text);
@@ -2586,6 +2615,7 @@ static void apply_header_visibility(void) {
         if (s.show_status && ticker_mode != TICKER_WHIMSY) lv_obj_clear_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
         else                               lv_obj_add_flag(ready_dot, LV_OBJ_FLAG_HIDDEN);
     }
+    if (lbl_host && (on_splash || !s.show_status)) lv_obj_add_flag(lbl_host, LV_OBJ_FLAG_HIDDEN);   // ui_tick_anim re-shows it
 }
 
 static void global_click_cb(lv_event_t* e) {
