@@ -211,7 +211,8 @@ def process_name(pid: int) -> str | None:
             except OSError:
                 with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as f:
                     return f.read().strip() or None
-        out = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=3)
+        exe = shutil.which("ps") or "/bin/ps"
+        out = subprocess.run([exe, "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=3)
         name = out.stdout.strip().splitlines()
         return os.path.basename(name[0].strip()) if name else None
     except Exception:  # noqa: BLE001
@@ -231,7 +232,23 @@ def boot_time() -> float | None:
     reboot mean nothing after it."""
     try:
         if sys.platform == "darwin":
-            out = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=3).stdout
+            # sysctlbyname() straight from libc: launchd's PATH may lack /usr/sbin.
+            try:
+                import ctypes
+                import ctypes.util
+
+                class _Timeval(ctypes.Structure):
+                    _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_int32)]
+
+                libc = ctypes.CDLL(ctypes.util.find_library("c"))
+                tv = _Timeval()
+                size = ctypes.c_size_t(ctypes.sizeof(tv))
+                if libc.sysctlbyname(b"kern.boottime", ctypes.byref(tv), ctypes.byref(size), None, 0) == 0 and tv.tv_sec > 0:
+                    return float(tv.tv_sec)
+            except Exception:  # noqa: BLE001 - fall through to the command
+                pass
+            exe = shutil.which("sysctl") or "/usr/sbin/sysctl"
+            out = subprocess.run([exe, "-n", "kern.boottime"], capture_output=True, text=True, timeout=3).stdout
             m = re.search(r"sec\s*=\s*(\d+)", out)
             return float(m.group(1)) if m else None
         if sys.platform.startswith("linux"):
