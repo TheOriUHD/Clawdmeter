@@ -65,14 +65,23 @@ struct CompanionData {
     char    host[13];                // remote host name, empty when local
 };
 
-// ---- Trend: usage history for the Trend page — the "tr" payload key ----
-// 24 hourly session-window maxima (oldest first, current hour last) and 7 daily
-// weekly-quota consumption values (oldest first, today last). -1 = no data.
-#define TREND_HOURS 24
-#define TREND_DAYS  7
-struct TrendData {
-    bool   present;
-    int8_t hours[TREND_HOURS];
-    int8_t days[TREND_DAYS];
+// ---- Stats: lifetime Claude Code numbers — the "st" payload key ----
+// Computed by the daemon from the local transcripts (daemon/stats.py): the
+// eight figures of the Claude app's stats card plus an activity heatmap, one
+// char per day ('0'..'4' intensity, 'x' = still in the future), oldest first,
+// in whole Sunday→Saturday weeks ending with the current one.
+#define ST_MAX_DAYS (7 * 30)
+struct StatsData {
+    bool     present;
+    uint32_t sessions;
+    uint32_t messages;
+    uint64_t tokens;
+    uint16_t active_days;
+    uint16_t streak;          // current streak, days
+    uint16_t best_streak;
+    int8_t   peak_hour;       // 0-23 local, -1 unknown
+    char     model[13];       // favourite model, e.g. "Fable 5"
+    uint16_t days;            // chars in heat[]
+    char     heat[ST_MAX_DAYS + 1];
 };
 

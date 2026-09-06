@@ -14,11 +14,9 @@
 #define KEY_SLEEP   "slp"
 #define KEY_FLIP    "flp"
 #define KEY_FACE    "fac"
-#define KEY_AUTOSW  "asw"
 #define KEY_GLOW    "glw"
 #define KEY_CHIME   "chm"
 #define KEY_VOLUME  "vol"
-#define KEY_HOME    "hom"
 
 static Settings S = {
     .clock        = CLOCK_AUTO,
@@ -28,14 +26,10 @@ static Settings S = {
     .sleep        = SLEEP_30M,
     .face_flip    = FLIP_7S,
     .face_default = 0,
-    .auto_switch  = true,
     .alert_glow   = true,
     .alert_chime  = CHIME_ALL,
     .volume       = 40,
-    .home_delay   = HOME_1M,
 };
-
-static const uint32_t HOME_MS[HOME_MODE_COUNT] = { 15000, 30000, 60000, 120000, 300000, 0 };
 
 static const uint32_t FLIP_MS[FLIP_MODE_COUNT] = { 0, 3000, 5000, 7000, 10000, 15000, 30000 };
 
@@ -68,11 +62,9 @@ void settings_init(void) {
     uint8_t slp = p.getUChar(KEY_SLEEP,   0xFF);
     uint8_t flp = p.getUChar(KEY_FLIP,    0xFF);
     uint8_t fac = p.getUChar(KEY_FACE,    0xFF);
-    uint8_t asw = p.getUChar(KEY_AUTOSW,  0xFF);
     uint8_t glw = p.getUChar(KEY_GLOW,    0xFF);
     uint8_t chm = p.getUChar(KEY_CHIME,   0xFF);
     uint8_t vol = p.getUChar(KEY_VOLUME,  0xFF);
-    uint8_t hom = p.getUChar(KEY_HOME,    0xFF);
     p.end();
 
     if (clk < CLOCK_MODE_COUNT) S.clock = clk;
@@ -82,19 +74,16 @@ void settings_init(void) {
     if (slp < SLEEP_MODE_COUNT) S.sleep = slp;
     if (flp < FLIP_MODE_COUNT)  S.face_flip = flp;
     if (fac != 0xFF && fac <= 4) S.face_default = fac;
-    if (asw != 0xFF)            S.auto_switch = asw != 0;
     if (glw != 0xFF)            S.alert_glow  = glw != 0;
     if (chm < CHIME_MODE_COUNT) S.alert_chime = chm;
     if (vol <= 100)             S.volume = vol;
-    if (hom < HOME_MODE_COUNT)  S.home_delay = hom;
 
     apply_sleep();
     Serial.printf("Settings: clock=%s battery=%d mascot=%d status=%d sleep=%s flip=%s face=%u "
-                  "autoswitch=%d glow=%d chime=%s volume=%u home=%s\n",
+                  "glow=%d chime=%s volume=%u\n",
         settings_clock_label(S.clock), S.show_battery, S.show_mascot, S.show_status,
         settings_sleep_label(S.sleep), settings_face_flip_label(S.face_flip), S.face_default,
-        S.auto_switch, S.alert_glow, settings_alert_chime_label(S.alert_chime), S.volume,
-        settings_home_delay_label(S.home_delay));
+        S.alert_glow, settings_alert_chime_label(S.alert_chime), S.volume);
 }
 
 const Settings& settings_get(void) { return S; }
@@ -128,7 +117,6 @@ void settings_set_face_default(uint8_t face) {
     put_u8(KEY_FACE, face);
 }
 
-void settings_set_auto_switch(bool v) { S.auto_switch = v; put_u8(KEY_AUTOSW, v ? 1 : 0); }
 void settings_set_alert_glow(bool v)  { S.alert_glow  = v; put_u8(KEY_GLOW,   v ? 1 : 0); }
 
 void settings_set_alert_chime(uint8_t mode) {
@@ -141,28 +129,6 @@ void settings_set_volume(uint8_t pct) {
     if (pct > 100) pct = 100;
     S.volume = pct;
     put_u8(KEY_VOLUME, pct);
-}
-
-void settings_set_home_delay(uint8_t mode) {
-    if (mode >= HOME_MODE_COUNT) mode = HOME_1M;
-    S.home_delay = mode;
-    put_u8(KEY_HOME, mode);
-}
-
-uint32_t settings_home_delay_ms(void) {
-    return S.home_delay < HOME_MODE_COUNT ? HOME_MS[S.home_delay] : HOME_MS[HOME_1M];
-}
-
-const char* settings_home_delay_label(uint8_t mode) {
-    switch (mode) {
-    case HOME_15S:  return "15 s";
-    case HOME_30S:  return "30 s";
-    case HOME_1M:   return "1 min";
-    case HOME_2M:   return "2 min";
-    case HOME_5M:   return "5 min";
-    case HOME_STAY: return "Stay";
-    default:        return "?";
-    }
 }
 
 const char* settings_alert_chime_label(uint8_t mode) {

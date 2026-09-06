@@ -11,7 +11,7 @@ static const BoardCaps caps = {
     .has_rotation = (bool)BOARD_HAS_ROTATION,
     .has_battery = (bool)BOARD_HAS_BATTERY,
     .has_imu = (bool)BOARD_HAS_IMU,
-    .be_pixels = true,       // display.cpp streams strips to the panel as-is
+    .be_pixels = false,      // LVGL renders plain RGB565; display.cpp swaps bytes on flush (see swap_on_flush)
     .corner_radius = 70,   // rounded glass: measured on the C6 2.16 with the `corners on` overlay (2026-09-05)
 };
 

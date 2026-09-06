@@ -37,7 +37,9 @@ static bool                  pix_cs_low = false;
 // The C6's SPI DMA takes at most 32 KB per transaction (an 18-bit bit-length
 // field); the bus max_transfer_sz (platformio.ini) is sized to match.
 #define PIX_CHUNK_MAX 32768
-static bool swap_on_flush = false;   // LVGL renders plain RGB565; we swap before the bus (debug A/B)
+static bool swap_on_flush = true;    // LVGL renders plain RGB565; we swap before the bus. LVGL 9.5's
+                                     // RGB565_SWAPPED render target blits RGB565 canvases without
+                                     // swapping (purple creatures), so the swap lives here.
 static bool async_enabled = true;    // false: the library's synchronous pixel path (debug A/B)
 
 static inline void pix_cs(bool low) {
@@ -138,7 +140,13 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
     const size_t n = (size_t)w * (size_t)h;
 
     if (swap_on_flush) {                         // LVGL rendered little-endian: make it bus order here
-        for (size_t i = 0; i < n; i++) buf[i] = (uint16_t)((buf[i] << 8) | (buf[i] >> 8));
+        uint32_t* p32 = (uint32_t*)buf;          // two pixels per step; strips are always even-sized
+        const size_t n32 = n / 2;
+        for (size_t i = 0; i < n32; i++) {
+            const uint32_t v = p32[i];
+            p32[i] = ((v & 0xFF00FF00u) >> 8) | ((v & 0x00FF00FFu) << 8);
+        }
+        if (n & 1) buf[n - 1] = (uint16_t)((buf[n - 1] << 8) | (buf[n - 1] >> 8));
     }
     if (!pix_dev || !async_enabled) {            // no async device: library path (data already in bus order)
         gfx->draw16bitBeRGBBitmap(x, y, buf, w, h);
