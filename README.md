@@ -193,8 +193,9 @@ launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # st
 Think of two roles. The **bridge** is the computer with the Bluetooth link
 running the daemon (this Mac, or a Windows PC). **Workers** are wherever Claude
 Code actually runs: the bridge itself, a dev box you ssh into, a VM or a
-container that can only reach the bridge over the network. Every worker needs
-the hooks; only the bridge needs Bluetooth.
+container that can only reach the bridge over the network. A worker gets
+**only the hooks** — one pasted line, no daemon, no Bluetooth, no clone of this
+repo. Installing the daemon on a worker does nothing useful there.
 
 **The bridge itself.** `install-mac.sh` offers it; by hand:
 
@@ -224,10 +225,21 @@ irm http://192.168.1.23:47393/install.ps1/<token> | iex
 The installer is served by the daemon itself with the bridge's address and a
 token baked in, merges 15 hooks into that machine's `~/.claude/settings.json`
 (keeping everything else, idempotent, backup written), and needs only `curl`
-plus `python3` or `node`; the PowerShell one needs nothing. New Claude Code
-sessions on that machine report to the bridge from then on and the device
+plus `python3` or `node`; the PowerShell one needs nothing. It ends by
+pinging the bridge and says whether it answered; the daemon's log then reads
+`Companion: <host> joined`, and `first hook from <host>` when Claude Code
+there fires its first event. Claude Code sessions on that machine report to
+the bridge from then on (running ones from their next event) and the device
 treats them like local ones. `... | sh -s -- --uninstall` removes them.
 Check from the worker with `curl -s http://<bridge>:47393/state/<token>`.
+
+If nothing shows up, the daemon's log says why: a hook that arrives without
+the right token is logged as `rejected a hook from <host>` (once per ten
+minutes per machine). Hooks installed another way — the plugin from the
+marketplace, `install-hooks.py` without `--url`/`--token` — post to that
+machine's own loopback, where nothing listens; point them at the bridge with
+`CLAWDMETER_URL=http://<bridge>:47393` and `CLAWDMETER_TOKEN=<token>` in that
+Claude Code's environment, or simply run the served installer instead.
 
 How it stays safe: the daemon listens on every interface, but anything that is
 not the bridge itself must present the token (generated on first start into
