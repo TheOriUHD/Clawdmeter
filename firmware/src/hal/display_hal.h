@@ -38,3 +38,13 @@ void display_hal_tick(void);
 
 // LVGL flush regions must be even-aligned on the CO5300; harmless on others.
 void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2);
+
+// ---- Debug toggles (serial "render plain|swapped", "dma on|off") ----
+// The C6 2.16 renders big-endian pixels straight into the DMA stream. To tell a
+// renderer artifact from a bus artifact without a reflash, the HAL can swap
+// bytes itself on flush (LVGL then renders plain RGB565) and can fall back to
+// the library's synchronous pixel path. Weak defaults: no-ops / false.
+void display_hal_set_swap_on_flush(bool on);
+bool display_hal_swap_on_flush(void);
+void display_hal_set_async(bool on);
+

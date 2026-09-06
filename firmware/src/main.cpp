@@ -289,6 +289,25 @@ static void check_serial_cmd() {
                 Serial.printf("volume -> %u%%\n", settings_get().volume);
             }
             else if (strncmp(cmd_buf, "corners", 7) == 0) ui_debug_corners(strstr(cmd_buf, "off") == nullptr);
+            // "render plain|swapped": LVGL renders RGB565 and the HAL swaps on flush, or
+            // LVGL renders bus order directly. "dma on|off": async DMA vs the library
+            // path. A/B tools for pixel artifacts on a board with no screenshot.
+            else if (strncmp(cmd_buf, "render ", 7) == 0) {
+                const bool plain = strcmp(cmd_buf + 7, "plain") == 0;
+                lv_display_t* d = lv_display_get_default();
+                display_hal_wait();
+                display_hal_set_swap_on_flush(plain);
+                lv_display_set_color_format(d, (plain || !board_caps().be_pixels) ? LV_COLOR_FORMAT_RGB565
+                                                                                   : LV_COLOR_FORMAT_RGB565_SWAPPED);
+                lv_obj_invalidate(lv_screen_active());
+                Serial.printf("render -> %s\n", plain ? "plain (HAL swaps)" : "swapped (LVGL renders bus order)");
+            }
+            else if (strncmp(cmd_buf, "dma ", 4) == 0) {
+                const bool on = strcmp(cmd_buf + 4, "on") == 0;
+                display_hal_set_async(on);
+                lv_obj_invalidate(lv_screen_active());
+                Serial.printf("dma -> %s\n", on ? "async" : "library path");
+            }
             else if (strncmp(cmd_buf, "radius ", 7) == 0) { ui_debug_glow_radius(atoi(cmd_buf + 7)); Serial.printf("glow radius -> %d\n", atoi(cmd_buf + 7)); }
             else if (strcmp(cmd_buf, "preview") == 0)   ui_preview_alert();
             else if (strncmp(cmd_buf, "cc ", 3) == 0) {
