@@ -225,7 +225,10 @@ async def advertise_mdns(port: int):
                        properties={"path": "/device/poll"}, server=f"{host}.local.")
     try:
         azc = AsyncZeroconf()
-        await azc.async_register_service(info)
+        # allow_name_change: a second hub on the same LAN (or a test beside the
+        # real one) gets "... 2" rather than failing outright. Devices browse by
+        # service type, so a renamed instance is still found.
+        await azc.async_register_service(info, allow_name_change=True)
     except Exception as e:  # noqa: BLE001 - discovery is a convenience, never fatal
         log(f"mDNS off: {e}")
         return None

@@ -6,13 +6,11 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
-// The access point is WPA2, not open: the whole point of the portal is to carry
-// the house WiFi key, and an open AP would put it on the air in the clear. The
-// device has a screen, so showing an 8-character key costs the user one glance
-// and buys real protection. Both name and key derive from the MAC, so they are
-// stable - the same device always shows the same pair.
+// The access point is open, by the owner's call: it is up for a few seconds on
+// a home network, and a key to type is friction on the one flow that has to be
+// effortless. The name derives from the MAC, so a device always advertises the
+// same one and several Clawdmeters never collide.
 static char ap_ssid[24];
-static char ap_pass[12];
 
 static DNSServer dns;
 static WebServer web(80);
@@ -97,14 +95,8 @@ void portal_begin(void) {
     const uint64_t chip = ESP.getEfuseMac();
     const uint8_t b4 = (uint8_t)((chip >> 32) & 0xFF), b5 = (uint8_t)((chip >> 40) & 0xFF);
     snprintf(ap_ssid, sizeof(ap_ssid), "Clawdmeter-%02X%02X", b4, b5);
-    // An alphabet without look-alike glyphs: read off a screen, typed on a phone.
-    static const char AB[] = "abcdefghjkmnpqrstuvwxyz23456789";
-    uint32_t seed = (uint32_t)(chip & 0xFFFFFFFF) ^ (uint32_t)(chip >> 32);
-    for (int i = 0; i < 8; i++) { ap_pass[i] = AB[seed % (sizeof(AB) - 1)]; seed = seed / 7 + 2654435761u; }
-    ap_pass[8] = '\0';
-
     WiFi.mode(WIFI_AP_STA);                 // AP for the phone, STA so we can scan
-    WiFi.softAP(ap_ssid, ap_pass);
+    WiFi.softAP(ap_ssid);                   // open: nothing to read off a screen
     delay(200);
     const IPAddress ip = WiFi.softAPIP();
     dns.start(53, "*", ip);                 // every lookup lands here: that is the portal
@@ -123,8 +115,8 @@ void portal_begin(void) {
 
     active = true;
     have_creds = false;
-    Serial.printf("portal: '%s' up on %s, key %s, %d network(s) in range\n",
-                  ap_ssid, ip.toString().c_str(), ap_pass, scan_count);
+    Serial.printf("portal: '%s' (open) up on %s, %d network(s) in range\n",
+                  ap_ssid, ip.toString().c_str(), scan_count);
 }
 
 void portal_tick(void) {
@@ -138,7 +130,6 @@ bool portal_credentials_ready(void) { return have_creds; }
 const char* portal_new_ssid(void) { return got_ssid.c_str(); }
 const char* portal_new_pass(void) { return got_pass.c_str(); }
 const char* portal_ap_ssid(void) { return ap_ssid; }
-const char* portal_ap_pass(void) { return ap_pass; }
 int portal_phones_connected(void) { return WiFi.softAPgetStationNum(); }
 
 #endif  // CLAWD_LINK_WIFI
