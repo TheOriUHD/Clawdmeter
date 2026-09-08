@@ -37,6 +37,10 @@ void ui_show_settings_page(int page);
 // down to Usage) as if a finger had flicked it; ms overrides the snap time
 // (0 = default). Lets a serial session measure transition frame rates.
 void ui_debug_swipe(int dir, uint32_t ms);
+// Inject a screen tap (serial `tap`) — the same handler a finger reaches.
+void ui_debug_tap(void);
+// True while an alert (glow / chime / mascot) is waiting to be acknowledged.
+bool ui_alert_active(void);
 
 // Companion ("cc") and Stats ("st") payload keys — applied independently of
 // the usage numbers (either may arrive on its own beat).

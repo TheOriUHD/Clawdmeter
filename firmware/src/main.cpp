@@ -370,6 +370,13 @@ static void check_serial_cmd() {
                 Serial.printf("swipe %s %lu\n", dir > 0 ? "up" : dir < 0 ? "down" : "?", (unsigned long)ms);
             }
             else if (strcmp(cmd_buf, "stats") == 0) print_stats();
+            else if (strcmp(cmd_buf, "tap") == 0) {
+                const bool a0 = ui_alert_active();
+                const bool s0 = ui_get_current_screen() == SCREEN_SPLASH;
+                ui_debug_tap();
+                Serial.printf("tap: alert %d->%d, splash %d->%d\n", (int)a0, (int)ui_alert_active(),
+                              (int)s0, (int)(ui_get_current_screen() == SCREEN_SPLASH));
+            }
             else if (strcmp(cmd_buf, "power") == 0) { power_hal_debug_dump(); print_boot_record(); }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
