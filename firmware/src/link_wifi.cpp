@@ -24,6 +24,9 @@
 #include <Preferences.h>
 #include <WiFi.h>
 
+#include "setup_portal.h"
+#include "ui.h"
+
 #define LINK_BUF_SIZE   1600      // hub trims payloads to 1400 B; leave headroom
 #define PREFS_NS        "clawdwifi"
 #define KEY_SSID        "ssid"
@@ -145,12 +148,17 @@ static void poll_task_fn(void*) {
 }
 
 // ---- the ble.h contract ------------------------------------------------------
+static bool portal_up = false;
+
 void ble_init(void) {
     rx_lock = xSemaphoreCreateMutex();
     rx_buf[0] = pending[0] = '\0';
     load_credentials();
     if (cred_ssid.length() == 0) {
-        Serial.println("wifi: no credentials - set them with: wifi <ssid> <password>");
+        // Nothing stored: raise our own hotspot and let a phone do the typing.
+        Serial.println("wifi: no network stored - opening the setup portal");
+        portal_begin();
+        portal_up = true;
         link_state = BLE_STATE_DISCONNECTED;
         return;
     }
@@ -161,7 +169,28 @@ void ble_init(void) {
     xTaskCreate(poll_task_fn, "clawdpoll", 6144, nullptr, 4, nullptr);
 }
 
-void ble_tick(void) {}
+// The portal lives on the main loop: its two servers are non-blocking, and
+// running them here keeps them off the poll task, which does not exist yet.
+void ble_tick(void) {
+    if (!portal_up) return;
+    portal_tick();
+
+    static uint32_t last_ui = 0;
+    const uint32_t now = millis();
+    if (now - last_ui >= 500) {
+        last_ui = now;
+        const int phones = portal_phones_connected();
+        ui_show_setup(portal_ap_ssid(), portal_ap_pass(),
+                      phones > 0 ? "Phone connected - the setup page should open by itself"
+                                 : "Waiting for a phone to join");
+    }
+    if (portal_credentials_ready()) {
+        ui_show_setup(portal_ap_ssid(), portal_ap_pass(), "Saved - restarting to join");
+        link_wifi_set_credentials(portal_new_ssid(), portal_new_pass());
+        delay(1500);                                      // let the phone see the page
+        ESP.restart();
+    }
+}
 
 bool ble_has_data(void) {
     if (!pending_ready) return false;
