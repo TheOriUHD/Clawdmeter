@@ -151,10 +151,14 @@ static void poll_task_fn(void*) {
             ui_set_link_hint("Connecting to the hub", hub_host, ip_str);
         }
 
-        HTTPClient http;
+        // One client for the life of the task, with the socket kept open between
+        // polls. Building and tearing one down every 25 s churned the little
+        // heap this board has left and eventually failed to connect at all.
+        static HTTPClient http;
         char url[128];
         snprintf(url, sizeof(url), "http://%s:%u/device/poll?seq=%lu&id=%s",
                  hub_host, (unsigned)hub_port, (unsigned long)hub_seq, device_id);
+        http.setReuse(true);
         http.setTimeout(POLL_TIMEOUT_MS);
         http.setConnectTimeout(5000);
         if (!http.begin(url)) { http.end(); hub_host[0] = '\0'; vTaskDelay(pdMS_TO_TICKS(RETRY_MS)); continue; }
@@ -168,15 +172,16 @@ static void poll_task_fn(void*) {
         } else if (code == 204) {
             link_state = BLE_STATE_CONNECTED;            // held, nothing new: healthy
         } else {
-            Serial.printf("wifi: hub %s:%u answered %d - looking again\n",
-                          hub_host, (unsigned)hub_port, code);
+            Serial.printf("wifi: hub %s:%u answered %d (free heap %u) - looking again\n",
+                          hub_host, (unsigned)hub_port, code,
+                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             hub_host[0] = '\0';                          // hub moved or went away
             hub_port = 0;
             link_state = BLE_STATE_ADVERTISING;
             ui_set_link_hint("Looking for the hub", cred_ssid.c_str(), ip_str);
             vTaskDelay(pdMS_TO_TICKS(RETRY_MS));
         }
-        http.end();
+        if (code <= 0) http.end();      // only drop the socket when it actually broke
         vTaskDelay(pdMS_TO_TICKS(20));                   // never spin the CPU away from LVGL
     }
 }
