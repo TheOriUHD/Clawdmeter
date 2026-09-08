@@ -216,10 +216,15 @@ async def advertise_mdns(port: int):
     except ImportError:
         log("mDNS off (pip install zeroconf) — devices need the hub address set by hand")
         return None
-    addrs = [socket.inet_aton(a) for a in cc_mod.local_addresses() if a[0].isdigit()]
+    # Advertise LAN addresses only. A Tailscale address (100.64/10) resolves
+    # from the same host name, and a device that picks it cannot route there —
+    # which looks exactly like "the hub was found and then never answered".
+    usable = [a for a in cc_mod.local_addresses() if a[0].isdigit() and not cc_mod.is_cgnat(a)]
+    addrs = [socket.inet_aton(a) for a in usable]
     if not addrs:
         log("mDNS off: no usable IPv4 address")
         return None
+    log(f"mDNS: advertising {', '.join(usable)}")
     host = cc_mod.hostname_short() or "clawdmeter-hub"
     info = ServiceInfo(MDNS_TYPE, f"{host}.{MDNS_TYPE}", addresses=addrs, port=port,
                        properties={"path": "/device/poll"}, server=f"{host}.local.")

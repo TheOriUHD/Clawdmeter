@@ -373,7 +373,41 @@ static uint32_t clock_base_ms = 0;
 static int      clock_fmt = 24;   // 12 or 24, the host's format from the daemon payload
 static int      clock_last_min = -1;   // last rendered minute; avoids redrawing the title every tick
 static lv_obj_t* usage_group;   // the two usage panels — shown when connected
-static lv_obj_t* pair_group;    // pairing hint — shown when disconnected
+static lv_obj_t* pair_group;    // link hint - shown when disconnected
+static lv_obj_t* pair_l1 = nullptr;
+static lv_obj_t* pair_l2 = nullptr;
+static lv_obj_t* pair_l3 = nullptr;
+#ifdef CLAWD_LINK_WIFI
+// A WiFi device has nothing to pair: this screen reports the link instead, and
+// the poll task overwrites all three lines as it goes (ui_set_link_hint).
+#define PAIR_HINT_1 "Starting up"
+#define PAIR_HINT_2 ""
+#define PAIR_HINT_3 ""
+#else
+#define PAIR_HINT_1 "To pair"
+#define PAIR_HINT_2 "hold the power button"
+#define PAIR_HINT_3 "for 3 seconds, then release"
+#endif
+
+// Staged by any task, applied by the LVGL loop: LVGL is single-threaded, and
+// the WiFi poll task runs beside it.
+static char hint_buf[3][40];
+static volatile bool hint_dirty = false;
+
+void ui_set_link_hint(const char* l1, const char* l2, const char* l3) {
+    strlcpy(hint_buf[0], l1 ? l1 : "", sizeof(hint_buf[0]));
+    strlcpy(hint_buf[1], l2 ? l2 : "", sizeof(hint_buf[1]));
+    strlcpy(hint_buf[2], l3 ? l3 : "", sizeof(hint_buf[2]));
+    hint_dirty = true;
+}
+
+static void apply_link_hint(void) {
+    if (!hint_dirty || !pair_l1) return;
+    hint_dirty = false;
+    lv_label_set_text(pair_l1, hint_buf[0]);
+    lv_label_set_text(pair_l2, hint_buf[1]);
+    lv_label_set_text(pair_l3, hint_buf[2]);
+}
 static lv_obj_t* bar_session;
 static lv_obj_t* lbl_session_pct;
 static lv_obj_t* lbl_session_label;
@@ -1028,19 +1062,22 @@ static void build_pair_group(lv_obj_t* parent) {
     lv_obj_add_flag(pair_group, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     lv_obj_t* l1 = lv_label_create(pair_group);
-    lv_label_set_text(l1, "To pair");
+    pair_l1 = l1;
+    lv_label_set_text(l1, PAIR_HINT_1);
     lv_obj_set_style_text_font(l1, L.bt_status_font, 0);
     lv_obj_set_style_text_color(l1, COL_TEXT, 0);
     lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, L.pair_y1);
 
     lv_obj_t* l2 = lv_label_create(pair_group);
-    lv_label_set_text(l2, "hold the power button");
+    pair_l2 = l2;
+    lv_label_set_text(l2, PAIR_HINT_2);
     lv_obj_set_style_text_font(l2, L.bt_device_font, 0);
     lv_obj_set_style_text_color(l2, COL_DIM, 0);
     lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, L.pair_y2);
 
     lv_obj_t* l3 = lv_label_create(pair_group);
-    lv_label_set_text(l3, "for 3 seconds, then release");
+    pair_l3 = l3;
+    lv_label_set_text(l3, PAIR_HINT_3);
     lv_obj_set_style_text_font(l3, L.bt_device_font, 0);
     lv_obj_set_style_text_color(l3, COL_DIM, 0);
     lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, L.pair_y3);
@@ -2482,6 +2519,7 @@ void ui_tick_anim(void) {
     // The Usage surface is parked, not destroyed, while Settings is up — keep
     // its pair/idle/live sub-view current so a drag never reveals a stale one.
     if (setup_root) return;                    // the setup card owns the screen
+    apply_link_hint();
     update_view_state();
     if (view_state == 1) splash_mini_tick();   // the idle creature keeps breathing
 

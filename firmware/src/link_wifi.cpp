@@ -100,10 +100,24 @@ void link_wifi_status(void) {
 static bool discover_hub(void) {
     const int n = MDNS.queryService(HUB_SERVICE, "tcp");
     if (n <= 0) return false;
-    IPAddress addr = MDNS.address(0);
+    // A host can answer with several addresses - a LAN one and, say, a VPN one
+    // that we cannot route to at all. Taking result 0 blindly is how a hub gets
+    // "found" and then never answers, so prefer an address on our own subnet.
+    const IPAddress mine = WiFi.localIP(), mask = WiFi.subnetMask();
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+        const IPAddress a = MDNS.address(i);
+        if (a[0] == 0) continue;
+        const bool same_subnet = ((uint32_t)a & (uint32_t)mask) == ((uint32_t)mine & (uint32_t)mask);
+        if (same_subnet) { best = i; break; }
+        if (best < 0) best = i;                    // fall back to the first routable-looking one
+    }
+    if (best < 0) return false;
+    const IPAddress addr = MDNS.address(best);
     snprintf(hub_host, sizeof(hub_host), "%s", addr.toString().c_str());
-    hub_port = MDNS.port(0);
-    Serial.printf("wifi: hub found at %s:%u\n", hub_host, (unsigned)hub_port);
+    hub_port = MDNS.port(best);
+    Serial.printf("wifi: hub found at %s:%u (%d address(es) offered)\n",
+                  hub_host, (unsigned)hub_port, n);
     return true;
 }
 
@@ -127,11 +141,14 @@ static void poll_task_fn(void*) {
             if (WiFi.status() != WL_CONNECTED) { vTaskDelay(pdMS_TO_TICKS(RETRY_MS)); continue; }
             snprintf(ip_str, sizeof(ip_str), "%s", WiFi.localIP().toString().c_str());
             Serial.printf("wifi: joined '%s' as %s\n", cred_ssid.c_str(), ip_str);
-            MDNS.begin("clawdmeter");
+            MDNS.begin(device_id);
+            ui_set_link_hint("Looking for the hub", cred_ssid.c_str(), ip_str);
         }
         if (!hub_host[0]) {
             link_state = BLE_STATE_ADVERTISING;          // "looking for a peer"
+            ui_set_link_hint("Looking for the hub", cred_ssid.c_str(), ip_str);
             if (!discover_hub()) { vTaskDelay(pdMS_TO_TICKS(RETRY_MS)); continue; }
+            ui_set_link_hint("Connecting to the hub", hub_host, ip_str);
         }
 
         HTTPClient http;
@@ -151,8 +168,12 @@ static void poll_task_fn(void*) {
         } else if (code == 204) {
             link_state = BLE_STATE_CONNECTED;            // held, nothing new: healthy
         } else {
+            Serial.printf("wifi: hub %s:%u answered %d - looking again\n",
+                          hub_host, (unsigned)hub_port, code);
             hub_host[0] = '\0';                          // hub moved or went away
+            hub_port = 0;
             link_state = BLE_STATE_ADVERTISING;
+            ui_set_link_hint("Looking for the hub", cred_ssid.c_str(), ip_str);
             vTaskDelay(pdMS_TO_TICKS(RETRY_MS));
         }
         http.end();
@@ -179,6 +200,7 @@ void ble_init(void) {
         return;
     }
     WiFi.mode(WIFI_STA);
+    ui_set_link_hint("Joining WiFi", cred_ssid.c_str(), "");
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(true);                                  // the panel needs the power more
     link_state = BLE_STATE_ADVERTISING;

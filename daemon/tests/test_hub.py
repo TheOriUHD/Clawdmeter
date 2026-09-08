@@ -139,3 +139,21 @@ def test_mdns_registers_from_inside_a_running_loop():
         await azc.async_close()
 
     asyncio.run(run())
+
+
+def test_mdns_never_advertises_a_tailscale_address(monkeypatch):
+    """A device that picks the 100.64/10 address cannot route to it, which looks
+    exactly like a hub that was found and then went silent."""
+    pytest.importorskip("zeroconf")
+    monkeypatch.setattr(hub_mod.cc_mod, "local_addresses",
+                        lambda: ["192.168.20.165", "100.126.125.117", "host.local"])
+
+    async def run():
+        azc, info = await asyncio.wait_for(hub_mod.advertise_mdns(47496), timeout=15)
+        import socket as _s
+        got = {_s.inet_ntoa(a) for a in info.addresses}
+        assert got == {"192.168.20.165"}
+        await azc.async_unregister_service(info)
+        await azc.async_close()
+
+    asyncio.run(run())
