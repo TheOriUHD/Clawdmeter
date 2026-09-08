@@ -2618,16 +2618,29 @@ static void apply_header_visibility(void) {
     if (lbl_host && (on_splash || !s.show_status)) lv_obj_add_flag(lbl_host, LV_OBJ_FLAG_HIDDEN);   // ui_tick_anim re-shows it
 }
 
+// One touch settles everything that is currently asking for it, rather than one
+// thing per tap: an alert waiting to be acknowledged AND the splash standing in
+// front of the numbers both go on the same press. Entering the splash is the
+// odd one out — it is a plain toggle, not a dismissal, so it only happens when
+// the tap found nothing to clear (dismissing an alert must never throw the
+// screensaver up in your face).
 static void global_click_cb(lv_event_t* e) {
     (void)e;
     if (click_guarded()) return;
-    if (alert_active || preview_until_ms) {          // a tap acknowledges the alert
+
+    bool settled = false;
+
+    if (alert_active || preview_until_ms) {          // acknowledge the alert
         preview_until_ms = 0;
         alert_stop();
-        return;
+        settled = true;
     }
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    if (current_screen == SCREEN_SPLASH) {           // and step out of the splash
+        ui_show_screen(prev_non_splash_screen);
+        settled = true;
+    }
+
+    if (!settled) ui_show_screen(SCREEN_SPLASH);
 }
 
 // ======== Swipe engine ========
@@ -3007,6 +3020,12 @@ void ui_show_level_page(int page) {
     ui_show_screen(SCREEN_USAGE);
     show_level_page(page);
 }
+
+void ui_debug_tap(void) {
+    global_click_cb(nullptr);       // the very path a finger takes
+}
+
+bool ui_alert_active(void) { return alert_active || preview_until_ms != 0; }
 
 void ui_preview_alert(void) {
     preview_until_ms = lv_tick_get() + 6000;

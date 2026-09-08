@@ -79,7 +79,8 @@ makes the device more functional while keeping its design language intact:
   on the 2.16, so nothing is cut off by the bezel), has the corner Clawd
   **jump, wave and point**, and plays a **two-note chime** through the speaker
   (the C6 2.16's ES8311 is now wired up; upstream left it silent). One tap
-  acknowledges. Settings → **Alerts** picks the chime (Off / Needs you / All),
+  acknowledges — and settles everything else waiting with it, so an alert that
+  arrived while the splash was up leaves with the splash on that same press. Settings → **Alerts** picks the chime (Off / Needs you / All),
   has a **Preview** button, a **Volume** slider (linear in dB; the codec
   follows your finger and auditions on release) and the **Glow** toggle.
 - **Stats page.** Left of Usage: the Claude app's stats card on the desk —
@@ -120,7 +121,7 @@ them.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe right from Usage for **Stats** (your lifetime Claude Code numbers and activity heatmap); page dots appear while you swipe. Swipe up for the five Settings pages (clock & toggles, sliders & pairing, Weekly card, Alerts, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and the corner Clawd jumps and waves; the status line says what Claude is doing the rest of the time. One tap acknowledges an alert.
+The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash. Swipe right from Usage for **Stats** (your lifetime Claude Code numbers and activity heatmap); page dots appear while you swipe. Swipe up for the five Settings pages (clock & toggles, sliders & pairing, Weekly card, Alerts, About) — left/right pages between them — and swipe down from anywhere in Settings to get back. On plans with a Fable limit, tap the Weekly card to flip between its faces. When Claude needs you the device glows orange, chimes softly and the corner Clawd jumps and waves; the status line says what Claude is doing the rest of the time. A tap settles everything pending at once: an alert waiting to be acknowledged and the splash standing in front of the numbers both clear on the same press. A tap only *enters* the splash when there was nothing to clear.
 
 |              Splash               |              Usage              |
 | :-------------------------------: | :-----------------------------: |
