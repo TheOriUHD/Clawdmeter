@@ -1,5 +1,8 @@
 #include "ui.h"
 #include "splash.h"
+#ifdef CLAWD_LINK_WIFI
+#include "link_wifi.h"
+#endif
 #include "settings.h"
 #include "brightness.h"
 #include "version.h"
@@ -444,6 +447,10 @@ static const char* const ST_LABELS[ST_TILES] = {
 #define GLOW_RINGS 5
 static const uint8_t GLOW_RING_OPA[GLOW_RINGS] = { 255, 170, 105, 55, 20 };
 static lv_obj_t* glow_obj = nullptr;
+static lv_obj_t* setup_root = nullptr;   // WiFi setup card (WiFi build)
+static lv_obj_t* setup_ssid = nullptr;
+static lv_obj_t* setup_pass = nullptr;
+static lv_obj_t* setup_stat = nullptr;
 static bool      alert_active = false;
 static int32_t   glow_level = 0;                 // animated 0..255
 static int       glow_radius = 0;                // corner radius in use (caps, or "radius N" over serial)
@@ -529,6 +536,13 @@ static lv_obj_t* sl_flip = nullptr;
 static lv_obj_t* lbl_flip = nullptr;
 
 // Pairing button
+#ifdef CLAWD_LINK_WIFI
+#define PAIR_TILE_LABEL  "WiFi"
+#define PAIR_BUTTON_IDLE "Set up WiFi"
+#else
+#define PAIR_TILE_LABEL  "Pairing"
+#define PAIR_BUTTON_IDLE "Forget host"
+#endif
 static lv_obj_t* pair_button = nullptr;
 static uint32_t  pairing_confirm_ms = 0;   // >0 while "Confirm?" is armed
 static uint32_t  pairing_cleared_ms = 0;   // >0 while "Cleared" is shown
@@ -1520,9 +1534,15 @@ static void pairing_tile_cb(lv_event_t* e) {
     if (click_guarded()) return;
     if (pairing_cleared_ms) return;
     if (pairing_confirm_ms) {
+#ifdef CLAWD_LINK_WIFI
+        pairing_confirm_ms = 0;
+        link_wifi_forget_and_restart();        // reboots into the setup hotspot
+        return;
+#else
         ble_clear_bonds();
         pairing_confirm_ms = 0;
         pairing_cleared_ms = lv_tick_get();
+#endif
     } else {
         pairing_confirm_ms = lv_tick_get();
     }
@@ -1540,7 +1560,7 @@ static void render_pairing_button(void) {
         lv_obj_set_style_bg_color(pair_button, COL_ACCENT, 0);
         lv_obj_set_style_text_color(pair_button, COL_TEXT, 0);
     } else {
-        lv_label_set_text(pair_button, "Forget host");
+        lv_label_set_text(pair_button, PAIR_BUTTON_IDLE);
         lv_obj_set_style_bg_color(pair_button, COL_BAR_BG, 0);
         lv_obj_set_style_text_color(pair_button, COL_TEXT, 0);
     }
@@ -1855,8 +1875,8 @@ static void build_settings_screen(void) {
         lv_obj_add_event_cb(t3, toggle_tile_cb, LV_EVENT_CLICKED, (void*)(intptr_t)TG_STATUS);
 
         lv_obj_t* t4 = make_tile(pg, L.margin + half_w + L.tile_gap, row_y, half_w, row_h, true);
-        tile_label(t4, "Pairing");
-        pair_button = make_pill_styled(t4, "Forget host", L.ctrl_font, 18, 8);
+        tile_label(t4, PAIR_TILE_LABEL);
+        pair_button = make_pill_styled(t4, PAIR_BUTTON_IDLE, L.ctrl_font, 18, 8);
         lv_obj_align(pair_button, LV_ALIGN_BOTTOM_LEFT, 0, 0);
         lv_obj_add_event_cb(t4, pairing_tile_cb, LV_EVENT_CLICKED, NULL);
     }
@@ -2461,6 +2481,7 @@ void ui_tick_anim(void) {
 
     // The Usage surface is parked, not destroyed, while Settings is up — keep
     // its pair/idle/live sub-view current so a drag never reveals a stale one.
+    if (setup_root) return;                    // the setup card owns the screen
     update_view_state();
     if (view_state == 1) splash_mini_tick();   // the idle creature keeps breathing
 
@@ -3032,18 +3053,23 @@ bool ui_alert_active(void) { return alert_active || preview_until_ms != 0; }
 // it onto the house network, on the device itself. The key is deliberately on
 // screen — the access point is WPA2, so the house password never crosses the
 // air in the clear, and the only way to learn the key is to be looking at it.
-static lv_obj_t* setup_root = nullptr;
-static lv_obj_t* setup_ssid = nullptr;
-static lv_obj_t* setup_pass = nullptr;
-static lv_obj_t* setup_stat = nullptr;
 
-void ui_show_setup(const char* ssid, const char* pass, const char* status) {
+bool ui_setup_showing(void) { return setup_root != nullptr; }
+
+void ui_show_setup(const char* ssid, const char* status) {
     if (!ssid) {                                   // done: back to the normal screens
         if (setup_root) { lv_obj_delete(setup_root); setup_root = nullptr; }
         return;
     }
     if (!setup_root) {
-        setup_root = make_group_sized(lv_screen_active(), 0, 0, L.scr_w, L.scr_h);
+        // The boot splash and the header mascot are canvases blitted straight to
+        // the panel, underneath LVGL's compositor — z-order cannot hold them
+        // back, so they tore through this card. Stop them, and park the card on
+        // the top layer so nothing LVGL draws can cover it either.
+        splash_actor_stop();
+        splash_mascot_set_visible(false);
+        splash_hide();
+        setup_root = make_group_sized(lv_layer_top(), 0, 0, L.scr_w, L.scr_h);
         lv_obj_set_style_bg_color(setup_root, COL_BG, 0);
         lv_obj_set_style_bg_opa(setup_root, LV_OPA_COVER, 0);
 
@@ -3065,8 +3091,9 @@ void ui_show_setup(const char* ssid, const char* pass, const char* status) {
         lv_obj_align(setup_ssid, LV_ALIGN_CENTER, 0, -6);
 
         setup_pass = lv_label_create(setup_root);
-        lv_obj_set_style_text_font(setup_pass, L.anim_font, 0);
-        lv_obj_set_style_text_color(setup_pass, COL_TEXT, 0);
+        lv_label_set_text(setup_pass, "no password needed");
+        lv_obj_set_style_text_font(setup_pass, L.reset_font, 0);
+        lv_obj_set_style_text_color(setup_pass, COL_DIM, 0);
         lv_obj_align(setup_pass, LV_ALIGN_CENTER, 0, 44);
 
         setup_stat = lv_label_create(setup_root);
@@ -3076,12 +3103,9 @@ void ui_show_setup(const char* ssid, const char* pass, const char* status) {
         lv_obj_set_style_text_align(setup_stat, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(setup_stat, LV_ALIGN_BOTTOM_MID, 0, -L.scr_h / 8);
     }
-    lv_obj_move_foreground(setup_root);
-    lv_label_set_text(setup_ssid, ssid);
-    static char pbuf[40];
-    snprintf(pbuf, sizeof(pbuf), "key  %s", pass ? pass : "");
-    lv_label_set_text(setup_pass, pbuf);
-    lv_label_set_text(setup_stat, status ? status : "");
+    if (strcmp(lv_label_get_text(setup_ssid), ssid) != 0) lv_label_set_text(setup_ssid, ssid);
+    if (strcmp(lv_label_get_text(setup_stat), status ? status : "") != 0)
+        lv_label_set_text(setup_stat, status ? status : "");   // rewriting every tick flickers
 }
 
 void ui_preview_alert(void) {

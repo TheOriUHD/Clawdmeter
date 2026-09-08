@@ -218,18 +218,23 @@ cannot tell the two apart, so the join one-liner below is unchanged. Devices
 find it over mDNS (`_clawdmeter._tcp`), so the only thing to set up on a
 device is which WiFi to join — and it asks for that itself.
 
-**Setting up a device.** With no network stored it raises its own hotspot and
-shows you, on its screen, the name to join and an 8-character key. Join it from
-a phone and the setup page opens by itself, the way a hotel WiFi login does.
-Pick the house network from the scanned list, type its password, and the device
-saves it and restarts onto your network. Nothing is typed on the device and no
-cable is involved.
+**Setting up a device.** With no network stored it raises its own open hotspot
+and shows the name on its screen. Join it from a phone and the setup page opens
+by itself, the way a hotel WiFi login does. Pick the house network from the
+scanned list, type its password, and the device saves it and restarts onto your
+network. Nothing is typed on the device and no cable is involved.
 
-The hotspot is WPA2 rather than open, deliberately: it carries your house WiFi
-password, and an open access point would put that on the air in the clear. The
-key is on the device's screen, so being able to see the device is what lets you
-set it up. (There is also `wifi <ssid> <password>` on the serial console if you
-prefer a cable; `wifi` alone reports the link, address, hub and signal.)
+**Changing the network later**, two ways:
+
+- **Settings → WiFi → Set up WiFi**, then tap again to confirm. (On a Bluetooth
+  build the same tile is the pairing one, "Forget host".)
+- **Hold both buttons for ten seconds.** Long enough that it cannot happen by
+  accident, and it works when the screen cannot help you — wrong network, hub
+  moved, no hub at all.
+
+Either one forgets the stored network and restarts into the hotspot. There is
+also `wifi <ssid> <password>` on the serial console if you prefer a cable;
+`wifi` alone reports the link, address, hub and signal.
 
 A hub needs no Bluetooth at all, so it runs happily on a headless box.
 

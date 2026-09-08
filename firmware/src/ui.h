@@ -42,10 +42,12 @@ void ui_debug_tap(void);
 // True while an alert (glow / chime / mascot) is waiting to be acknowledged.
 bool ui_alert_active(void);
 
-// WiFi setup portal (WiFi build): a full-screen card telling you which
-// hotspot to join and with what key. Call again to update `status`;
-// pass nullptr for ssid to take it down.
-void ui_show_setup(const char* ssid, const char* pass, const char* status);
+// WiFi setup portal (WiFi build): a full-screen card naming the hotspot to
+// join. Call again to update `status`; pass nullptr for ssid to take it down.
+void ui_show_setup(const char* ssid, const char* status);
+// True while that card owns the screen — the creature animations blit straight
+// to the panel, so they must be held off while it is up.
+bool ui_setup_showing(void);
 
 // Companion ("cc") and Stats ("st") payload keys — applied independently of
 // the usage numbers (either may arrive on its own beat).

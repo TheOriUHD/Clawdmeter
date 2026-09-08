@@ -45,6 +45,7 @@ static char  hub_host[64] = "";
 static uint16_t hub_port = 0;
 static uint32_t hub_seq = 0;
 static char  ip_str[20] = "0.0.0.0";
+static char  device_id[16] = "";        // stable across reboots and DHCP leases
 
 // ---- credentials -------------------------------------------------------------
 // Typed by the user (serial `wifi <ssid> <password>`) and kept in NVS. They are
@@ -72,6 +73,18 @@ void link_wifi_set_credentials(const char* ssid, const char* pass) {
 bool link_wifi_has_credentials(void) {
     load_credentials();
     return cred_ssid.length() > 0;
+}
+
+// Triggered from Settings (two taps) or by holding both buttons. Clearing the
+// stored network and restarting is the whole mechanism: the next boot finds
+// nothing stored and opens the portal, so there is no half-torn-down radio
+// state to get wrong.
+void link_wifi_forget_and_restart(void) {
+    Preferences p;
+    if (p.begin(PREFS_NS, false)) { p.clear(); p.end(); }
+    Serial.println("wifi: network forgotten - restarting into the setup hotspot");
+    delay(300);
+    ESP.restart();
 }
 
 void link_wifi_status(void) {
@@ -124,7 +137,7 @@ static void poll_task_fn(void*) {
         HTTPClient http;
         char url[128];
         snprintf(url, sizeof(url), "http://%s:%u/device/poll?seq=%lu&id=%s",
-                 hub_host, (unsigned)hub_port, (unsigned long)hub_seq, ip_str);
+                 hub_host, (unsigned)hub_port, (unsigned long)hub_seq, device_id);
         http.setTimeout(POLL_TIMEOUT_MS);
         http.setConnectTimeout(5000);
         if (!http.begin(url)) { http.end(); hub_host[0] = '\0'; vTaskDelay(pdMS_TO_TICKS(RETRY_MS)); continue; }
@@ -153,6 +166,9 @@ static bool portal_up = false;
 void ble_init(void) {
     rx_lock = xSemaphoreCreateMutex();
     rx_buf[0] = pending[0] = '\0';
+    const uint64_t chip = ESP.getEfuseMac();
+    snprintf(device_id, sizeof(device_id), "clawd-%02X%02X",
+             (unsigned)((chip >> 32) & 0xFF), (unsigned)((chip >> 40) & 0xFF));
     load_credentials();
     if (cred_ssid.length() == 0) {
         // Nothing stored: raise our own hotspot and let a phone do the typing.
@@ -180,12 +196,12 @@ void ble_tick(void) {
     if (now - last_ui >= 500) {
         last_ui = now;
         const int phones = portal_phones_connected();
-        ui_show_setup(portal_ap_ssid(), portal_ap_pass(),
-                      phones > 0 ? "Phone connected - the setup page should open by itself"
+        ui_show_setup(portal_ap_ssid(),
+                      phones > 0 ? "Phone connected, the setup page opens by itself"
                                  : "Waiting for a phone to join");
     }
     if (portal_credentials_ready()) {
-        ui_show_setup(portal_ap_ssid(), portal_ap_pass(), "Saved - restarting to join");
+        ui_show_setup(portal_ap_ssid(), "Saved, restarting to join");
         link_wifi_set_credentials(portal_new_ssid(), portal_new_pass());
         delay(1500);                                      // let the phone see the page
         ESP.restart();

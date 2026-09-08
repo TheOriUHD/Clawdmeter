@@ -569,7 +569,7 @@ void loop() {
     sound_hal_tick();
     splash_tick();
     splash_mascot_tick();
-    splash_actor_tick();
+    if (!ui_setup_showing()) splash_actor_tick();   // the card owns the panel while it is up
     // Rotation transition (blank + ramp) would fight the idle fade — skip
     // ticks while the panel is dark. A rotation that happens during sleep
     // is detected by the next tick after wake and ramped in then.
@@ -584,6 +584,27 @@ void loop() {
     // idle_consume_wake_press(); the normal action fires from the second
     // press. Activity bookkeeping happens inside idle_consume_wake_press
     // so no separate idle_note_activity() call is needed here.
+#ifdef CLAWD_LINK_WIFI
+    // Both buttons held together for ten seconds forces the WiFi setup hotspot,
+    // whatever state the device is in. Ten seconds and two buttons is long
+    // enough that it cannot happen by accident, and it is the way back when the
+    // screen cannot be reached (wrong network, no hub, moved house).
+    {
+        static uint32_t both_since = 0;
+        const bool both = input_hal_is_held(INPUT_BTN_PRIMARY) && input_hal_is_held(INPUT_BTN_SECONDARY);
+        const uint32_t now_ms = millis();
+        if (!both) {
+            both_since = 0;
+        } else if (both_since == 0) {
+            both_since = now_ms;
+        } else if (now_ms - both_since >= 10000) {
+            both_since = 0;
+            Serial.println("buttons: both held 10s - forcing WiFi setup");
+            link_wifi_forget_and_restart();
+        }
+    }
+#endif
+
     {
         static bool primary_was = false;
         static bool primary_wake_swallowed = false;

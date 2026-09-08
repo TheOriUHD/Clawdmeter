@@ -13,6 +13,5 @@ bool portal_active(void);
 bool portal_credentials_ready(void);   // a phone submitted a network
 const char* portal_new_ssid(void);
 const char* portal_new_pass(void);
-const char* portal_ap_ssid(void);      // what the device tells you to join
-const char* portal_ap_pass(void);      // shown on screen; the air link is encrypted
+const char* portal_ap_ssid(void);      // the open network the device tells you to join
 int  portal_phones_connected(void);
