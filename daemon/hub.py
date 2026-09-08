@@ -48,6 +48,12 @@ except ImportError:  # pragma: no cover - package import path
 DEVICE_PORT = 47394           # Clawdmeters poll here; hooks keep 47393
 MDNS_TYPE = "_clawdmeter._tcp.local."
 LONG_POLL_S = 25.0            # hold a device's request this long before saying "nothing new"
+RESYNC_S = 600.0              # push at least this often so device clocks cannot drift
+# Fields that tick on their own and must not count as news: the device runs its
+# own clock from `t` and its own elapsed counter from `cc.e`. Without this the
+# payload differs on every rebuild, every long-poll returns instantly, and the
+# whole point of holding the connection is lost.
+VOLATILE = ("t", "tf")
 DEVICE_STALE_S = 300.0        # a device unheard from this long has gone
 PAYLOAD_MAX = 1400            # WiFi has no 500 B BLE cap; keep it inside one MTU
 
@@ -67,13 +73,33 @@ class Hub:
     def __init__(self) -> None:
         self.payload: dict = {}
         self.seq: int = 0
+        self._signature_last: str | None = None
+        self._last_bump: float = 0.0
         self._changed = asyncio.Event()
         self.devices: dict[str, dict] = {}
 
+    @staticmethod
+    def _signature(payload: dict) -> str:
+        """What counts as a change worth waking every device for."""
+        body = {k: v for k, v in payload.items() if k not in VOLATILE}
+        cc = body.get("cc")
+        if isinstance(cc, dict):
+            body["cc"] = {k: v for k, v in cc.items() if k != "e"}
+        return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
     def publish(self, payload: dict) -> None:
-        if payload == self.payload:
-            return
+        """Store the payload; wake devices only when something real moved.
+
+        The freshest clock always rides along with whatever does wake them, and
+        RESYNC_S guarantees a push even on a completely idle account.
+        """
+        sig = self._signature(payload)
+        now = time.time()
         self.payload = payload
+        if sig == self._signature_last and now - self._last_bump < RESYNC_S:
+            return
+        self._signature_last = sig
+        self._last_bump = now
         self.seq += 1
         self._changed.set()
         self._changed.clear()
@@ -174,14 +200,19 @@ async def serve_devices(hub: Hub, host: str, port: int):
     return server
 
 
-def advertise_mdns(port: int):
+async def advertise_mdns(port: int):
     """Publish _clawdmeter._tcp so devices need no address configured.
 
-    Optional: without the zeroconf package the hub still works, devices just
+    Must use the *async* zeroconf interface: the synchronous one hands a
+    coroutine to the running loop and blocks waiting for it, which on an
+    asyncio hub deadlocks until it times out and takes the process with it.
+
+    Optional — without the zeroconf package the hub still works, devices just
     have to be told the address once.
     """
     try:
-        from zeroconf import ServiceInfo, Zeroconf
+        from zeroconf import ServiceInfo
+        from zeroconf.asyncio import AsyncZeroconf
     except ImportError:
         log("mDNS off (pip install zeroconf) — devices need the hub address set by hand")
         return None
@@ -192,10 +223,14 @@ def advertise_mdns(port: int):
     host = cc_mod.hostname_short() or "clawdmeter-hub"
     info = ServiceInfo(MDNS_TYPE, f"{host}.{MDNS_TYPE}", addresses=addrs, port=port,
                        properties={"path": "/device/poll"}, server=f"{host}.local.")
-    zc = Zeroconf()
-    zc.register_service(info)
+    try:
+        azc = AsyncZeroconf()
+        await azc.async_register_service(info)
+    except Exception as e:  # noqa: BLE001 - discovery is a convenience, never fatal
+        log(f"mDNS off: {e}")
+        return None
     log(f"mDNS: advertising {MDNS_TYPE} on port {port} as {host}.local")
-    return (zc, info)
+    return (azc, info)
 
 
 async def main() -> None:
@@ -208,18 +243,22 @@ async def main() -> None:
     hub = Hub()
     log("=== Clawdmeter WiFi hub ===")
 
+    # A hook event is the latency-sensitive path: "Claude needs you" should
+    # reach every desk as fast as the network allows, not on the next tick.
+    hook_woke = asyncio.Event()
+
     # Hooks, stats and history are the daemon's own machinery, unchanged.
     daemon.HISTORY = trend_mod.History(daemon.HISTORY_FILE)
     hook_port = args.hook_port or daemon.read_companion_port()
     token = daemon.companion_token()
     daemon.COMPANION.log = log
     cc_server = await cc_mod.start_companion_server(
-        daemon.COMPANION, lambda: None, daemon.read_companion_bind(), hook_port, log=log, token=token)
+        daemon.COMPANION, hook_woke.set, daemon.read_companion_bind(), hook_port, log=log, token=token)
     if daemon.read_stats_setting() == "on":
         daemon.STATS = stats_mod.ClaudeStats(daemon.stats_project_dirs(), daemon.STATS_CACHE,
                                              exclude_substrings=(daemon.CONFIG_FILE.parent.name,), log=log)
     dev_server = await serve_devices(hub, args.bind, args.port)
-    mdns = advertise_mdns(args.port)
+    mdns = await advertise_mdns(args.port)
     for line in cc_mod.join_text(hook_port, token).splitlines():
         log("  " + line if line else "")
 
@@ -251,16 +290,20 @@ async def main() -> None:
             if st is not None:
                 body["st"] = st
             hub.publish(body)
-            await asyncio.sleep(0.5)
+            try:                                    # wake at once on a hook event
+                await asyncio.wait_for(hook_woke.wait(), timeout=0.5)
+                hook_woke.clear()
+            except asyncio.TimeoutError:
+                pass
     finally:
         if dev_server is not None:
             dev_server.close()
         if cc_server is not None:
             cc_server.close()
         if mdns is not None:
-            zc, info = mdns
-            zc.unregister_service(info)
-            zc.close()
+            azc, info = mdns
+            await azc.async_unregister_service(info)
+            await azc.async_close()
 
 
 if __name__ == "__main__":
