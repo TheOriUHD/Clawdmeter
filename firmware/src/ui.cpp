@@ -3027,6 +3027,63 @@ void ui_debug_tap(void) {
 
 bool ui_alert_active(void) { return alert_active || preview_until_ms != 0; }
 
+// ---- WiFi setup card ---------------------------------------------------------
+// Shown while the device is running its own hotspot: everything you need to get
+// it onto the house network, on the device itself. The key is deliberately on
+// screen — the access point is WPA2, so the house password never crosses the
+// air in the clear, and the only way to learn the key is to be looking at it.
+static lv_obj_t* setup_root = nullptr;
+static lv_obj_t* setup_ssid = nullptr;
+static lv_obj_t* setup_pass = nullptr;
+static lv_obj_t* setup_stat = nullptr;
+
+void ui_show_setup(const char* ssid, const char* pass, const char* status) {
+    if (!ssid) {                                   // done: back to the normal screens
+        if (setup_root) { lv_obj_delete(setup_root); setup_root = nullptr; }
+        return;
+    }
+    if (!setup_root) {
+        setup_root = make_group_sized(lv_screen_active(), 0, 0, L.scr_w, L.scr_h);
+        lv_obj_set_style_bg_color(setup_root, COL_BG, 0);
+        lv_obj_set_style_bg_opa(setup_root, LV_OPA_COVER, 0);
+
+        lv_obj_t* head = lv_label_create(setup_root);
+        lv_label_set_text(head, "Set me up");
+        lv_obj_set_style_text_font(head, L.title_font, 0);
+        lv_obj_set_style_text_color(head, COL_TEXT, 0);
+        lv_obj_align(head, LV_ALIGN_TOP_MID, 0, L.scr_h / 6);
+
+        lv_obj_t* hint = lv_label_create(setup_root);
+        lv_label_set_text(hint, "Join this network from your phone");
+        lv_obj_set_style_text_font(hint, L.reset_font, 0);
+        lv_obj_set_style_text_color(hint, COL_DIM, 0);
+        lv_obj_align_to(hint, head, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+
+        setup_ssid = lv_label_create(setup_root);
+        lv_obj_set_style_text_font(setup_ssid, L.pill_font, 0);
+        lv_obj_set_style_text_color(setup_ssid, COL_ACCENT, 0);
+        lv_obj_align(setup_ssid, LV_ALIGN_CENTER, 0, -6);
+
+        setup_pass = lv_label_create(setup_root);
+        lv_obj_set_style_text_font(setup_pass, L.anim_font, 0);
+        lv_obj_set_style_text_color(setup_pass, COL_TEXT, 0);
+        lv_obj_align(setup_pass, LV_ALIGN_CENTER, 0, 44);
+
+        setup_stat = lv_label_create(setup_root);
+        lv_obj_set_style_text_font(setup_stat, L.reset_font, 0);
+        lv_obj_set_style_text_color(setup_stat, COL_DIM, 0);
+        lv_obj_set_width(setup_stat, L.content_w);
+        lv_obj_set_style_text_align(setup_stat, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(setup_stat, LV_ALIGN_BOTTOM_MID, 0, -L.scr_h / 8);
+    }
+    lv_obj_move_foreground(setup_root);
+    lv_label_set_text(setup_ssid, ssid);
+    static char pbuf[40];
+    snprintf(pbuf, sizeof(pbuf), "key  %s", pass ? pass : "");
+    lv_label_set_text(setup_pass, pbuf);
+    lv_label_set_text(setup_stat, status ? status : "");
+}
+
 void ui_preview_alert(void) {
     preview_until_ms = lv_tick_get() + 6000;
     alert_start(0);

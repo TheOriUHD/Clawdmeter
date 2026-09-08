@@ -215,17 +215,23 @@ python3 daemon/hub.py
 The hub polls the usage numbers, scans your transcripts for the Stats page and
 listens for hook events exactly as the Bluetooth bridge does — a worker machine
 cannot tell the two apart, so the join one-liner below is unchanged. Devices
-find it over mDNS (`_clawdmeter._tcp`), so nothing is configured on them but
-the WiFi credentials, which you type into the device yourself:
+find it over mDNS (`_clawdmeter._tcp`), so the only thing to set up on a
+device is which WiFi to join — and it asks for that itself.
 
-```
-wifi <ssid> <password>
-```
+**Setting up a device.** With no network stored it raises its own hotspot and
+shows you, on its screen, the name to join and an 8-character key. Join it from
+a phone and the setup page opens by itself, the way a hotel WiFi login does.
+Pick the house network from the scanned list, type its password, and the device
+saves it and restarts onto your network. Nothing is typed on the device and no
+cable is involved.
 
-over its serial console (they go straight into the device's own storage and
-from there only to your access point). `wifi` on its own reports the link, the
-address, the hub it found and the signal strength. A hub needs no Bluetooth at
-all, so it runs happily on a headless box.
+The hotspot is WPA2 rather than open, deliberately: it carries your house WiFi
+password, and an open access point would put that on the air in the clear. The
+key is on the device's screen, so being able to see the device is what lets you
+set it up. (There is also `wifi <ssid> <password>` on the serial console if you
+prefer a cable; `wifi` alone reports the link, address, hub and signal.)
+
+A hub needs no Bluetooth at all, so it runs happily on a headless box.
 
 Devices hold a long-poll open rather than asking repeatedly, so an alert
 reaches every desk in about 30 ms while an idle account costs one request per
