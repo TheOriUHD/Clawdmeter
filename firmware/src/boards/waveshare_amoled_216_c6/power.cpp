@@ -31,6 +31,21 @@ void power_hal_init(void) {
     // IRQ wiring here.
     pmu.enableBattDetection();
     pmu.enableBattVoltageMeasure();
+    // Without these two ADCs the VBUS and SYS readings are always 0 mV, which
+    // hides exactly the sag that makes a weak supply reset the board.
+    pmu.enableVbusVoltageMeasure();
+    pmu.enableSystemVoltageMeasure();
+
+    // This board ships without a cell, so VBUS *is* the system's only source:
+    // nothing buffers the panel's inrush or a BLE transmit burst. The AXP2101
+    // powers up with its input voltage limit (VINDPM) at 4.36 V and starts
+    // throttling the input the moment VBUS dips there — on a thin cable or a
+    // modest charger that is enough to collapse the rail, drop the board, and
+    // start the boot-and-die loop. 4.04 V keeps a comfortable margin over the
+    // ~3.4 V the 3.3 V ALDO rails need while tolerating a far weaker supply.
+    // A good supply never reaches either threshold, so this costs nothing.
+    pmu.setVbusVoltageLimit(XPOWERS_AXP2101_VBUS_VOL_LIM_4V04);
+    pmu.setVbusCurrentLimit(XPOWERS_AXP2101_VBUS_CUR_LIM_1500MA);   // was already the default; pin it
 
     // Mirror the Waveshare XiaoZhi BSP charging config so the on-chip
     // fuel gauge has the right reference numbers. Without these,
@@ -91,4 +106,22 @@ bool power_hal_pwr_long_pressed(void) {
 bool power_hal_pwr_released(void) {
     if (pwr_released_flag) { pwr_released_flag = false; return true; }
     return false;
+}
+
+// Serial `power`: everything the AXP2101 knows about where the board's
+// energy comes from. Used to diagnose the "boots, then dies on a plain
+// charger" symptom — the usual cause is a VBUS input current limit lower
+// than the panel's inrush.
+void power_hal_debug_dump(void) {
+    static const uint16_t VBUS_LIM_MA[] = {100, 500, 900, 1000, 1500, 2000};
+    const uint8_t lim = pmu.getVbusCurrentLimit();
+    const uint8_t vlim = pmu.getVbusVoltageLimit();      // VINDPM: input collapses below this
+    Serial.printf("power: vbus=%s %umV, ilim=%umA (opt %u), vlim=%umV (opt %u), sys=%umV\n",
+                  pmu.isVbusIn() ? "in" : "absent", pmu.getVbusVoltage(),
+                  lim < (sizeof(VBUS_LIM_MA) / sizeof(VBUS_LIM_MA[0])) ? VBUS_LIM_MA[lim] : 0,
+                  lim, 3880 + (unsigned)vlim * 80, vlim, pmu.getSystemVoltage());
+    Serial.printf("power: battery=%s %umV %d%%, charging=%d, chg_curr_opt=%u, sys_off=%umV\n",
+                  pmu.isBatteryConnect() ? "present" : "none", pmu.getBattVoltage(),
+                  pmu.getBatteryPercent(), (int)pmu.isCharging(),
+                  pmu.getChargerConstantCurr(), pmu.getSysPowerDownVoltage());
 }

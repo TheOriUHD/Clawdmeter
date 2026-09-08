@@ -25,3 +25,7 @@ bool power_hal_pwr_long_pressed(void);
 // Edge-triggered: true once on the PWR release edge, then clears. Completes
 // or cancels the hold-to-pair gesture.
 bool power_hal_pwr_released(void);
+
+// Print whatever the board's power path can report (rails, input limits,
+// battery) to Serial. Serial command `power`. Boards without a PMU say so.
+void power_hal_debug_dump(void);

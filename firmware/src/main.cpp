@@ -19,6 +19,10 @@
 #include "hal/touch_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
+#include <Preferences.h>
+#include <esp_system.h>
+
+static void print_boot_record(void);
 #include "hal/imu_hal.h"
 #include "hal/sound_hal.h"
 
@@ -366,6 +370,7 @@ static void check_serial_cmd() {
                 Serial.printf("swipe %s %lu\n", dir > 0 ? "up" : dir < 0 ? "down" : "?", (unsigned long)ms);
             }
             else if (strcmp(cmd_buf, "stats") == 0) print_stats();
+            else if (strcmp(cmd_buf, "power") == 0) { power_hal_debug_dump(); print_boot_record(); }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -441,6 +446,49 @@ void setup() {
                   "free heap %u B, LVGL pool %u%% used\n",
         board_caps().name, W, H,
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)mon.used_pct);
+    print_boot_record();
+}
+
+// ---- Boot record -------------------------------------------------------------
+// The board has no battery: every power hiccup is a full restart, and the
+// interesting ones happen while it is plugged into a charger with no serial
+// console attached. So each boot is counted in NVS together with why it
+// started, and the tally is printed on the next boot (and by `power`). A run
+// of power-on resets with no unplugging is the signature of a supply that
+// cannot hold the rail up.
+static uint32_t boot_count = 0;
+static const char* boot_reason_name = "?";
+
+static const char* reset_reason_str(esp_reset_reason_t r) {
+    switch (r) {
+    case ESP_RST_POWERON:   return "power-on";     // rail came up (or collapsed and returned)
+    case ESP_RST_EXT:       return "reset pin";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:   return "int watchdog";
+    case ESP_RST_TASK_WDT:  return "task watchdog";
+    case ESP_RST_WDT:       return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT";     // the MCU's own detector saw the rail fall
+    case ESP_RST_SDIO:      return "sdio";
+    default:                return "unknown";
+    }
+}
+
+static void print_boot_record(void) {
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        boot_reason_name = reset_reason_str(esp_reset_reason());
+        Preferences p;
+        if (p.begin("clawdboot", false)) {
+            boot_count = p.getULong("n", 0) + 1;
+            p.putULong("n", boot_count);
+            p.end();
+        }
+    }
+    Serial.printf("boot: #%lu, reason=%s, uptime %lus\n",
+                  (unsigned long)boot_count, boot_reason_name, (unsigned long)(millis() / 1000));
 }
 
 static ble_state_t last_ble_state = BLE_STATE_INIT;
