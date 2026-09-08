@@ -49,6 +49,11 @@ void ui_show_setup(const char* ssid, const char* status);
 // to the panel, so they must be held off while it is up.
 bool ui_setup_showing(void);
 
+// Replace the three lines of the disconnected-screen hint (WiFi build: what
+// the link is doing). Safe to call from another task - it only stages text,
+// which the LVGL loop applies on its next tick.
+void ui_set_link_hint(const char* l1, const char* l2, const char* l3);
+
 // Companion ("cc") and Stats ("st") payload keys — applied independently of
 // the usage numbers (either may arrive on its own beat).
 void ui_companion_update(const CompanionData* cc);
