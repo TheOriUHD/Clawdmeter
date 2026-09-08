@@ -39,6 +39,24 @@ def test_publish_bumps_seq_only_on_real_change():
     assert h.seq == 2
 
 
+def test_a_ticking_clock_is_not_news(monkeypatch):
+    """The payload is rebuilt twice a second with a fresh timestamp and elapsed
+    counter. If those counted as changes every long-poll would return at once."""
+    h = Hub()
+    h.publish({"s": 10, "t": 1000, "tf": 24, "cc": {"n": 1, "s": 2, "e": 5}})
+    first = h.seq
+    for i in range(1, 40):          # 20 seconds of rebuilds, nothing really moving
+        h.publish({"s": 10, "t": 1000 + i, "tf": 24, "cc": {"n": 1, "s": 2, "e": 5 + i}})
+    assert h.seq == first, "a ticking clock must not wake every device"
+    assert h.payload["t"] == 1039, "but the freshest clock is what is stored"
+    h.publish({"s": 10, "t": 1100, "tf": 24, "cc": {"n": 1, "s": 5, "e": 0}})   # needs you
+    assert h.seq == first + 1
+    # An idle account still gets a periodic push so device clocks cannot drift.
+    monkeypatch.setattr(hub_mod, "RESYNC_S", 0.0)
+    h.publish({"s": 10, "t": 1101, "tf": 24, "cc": {"n": 1, "s": 5, "e": 1}})
+    assert h.seq == first + 2
+
+
 def test_encode_sheds_stats_then_trend_to_fit_one_mtu():
     h = Hub()
     h.publish({"s": 10, "cc": {"n": 1, "s": 2}, "tr": {"h": [1] * 24},
@@ -106,3 +124,18 @@ def test_stale_devices_are_forgotten(monkeypatch):
     assert h.note_device("a", "1.2.3.4")
     assert h.note_device("b", "1.2.3.5")        # 'a' expires as 'b' arrives
     assert set(h.devices) == {"b"}
+
+
+def test_mdns_registers_from_inside_a_running_loop():
+    """The sync Zeroconf API deadlocks on an asyncio hub; this is that regression."""
+    pytest.importorskip("zeroconf")
+
+    async def run():
+        handle = await asyncio.wait_for(hub_mod.advertise_mdns(47495), timeout=15)
+        assert handle is not None, "mDNS should register when zeroconf is installed"
+        azc, info = handle
+        assert info.port == 47495 and info.type == hub_mod.MDNS_TYPE
+        await azc.async_unregister_service(info)
+        await azc.async_close()
+
+    asyncio.run(run())

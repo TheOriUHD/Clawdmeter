@@ -192,6 +192,45 @@ launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # st
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
 ```
 
+### Two modes: Bluetooth, or WiFi with a hub
+
+A Clawdmeter can get its numbers two ways, and the choice is made **when you
+flash it** — the ESP32-C6 cannot run both radios alongside this UI (measured:
+73.7 KB of free heap on the Bluetooth build, 21.8 KB with the WiFi stack merely
+linked in, at which point WiFi refuses to start).
+
+**Bluetooth** (`waveshare_amoled_216_c6`) is the simple one: the device pairs
+with one nearby Mac or PC running the daemon. Nothing else to set up, but the
+numbers stop when that machine sleeps, walks out of range or shuts its lid.
+
+**WiFi** (`waveshare_amoled_216_c6_wifi`) puts the device on your home network
+instead, talking to a **hub** you run on anything always-on — a NAS, a Pi, a
+VM. That decouples the display from any one laptop, and any number of
+Clawdmeters can watch the same hub from different desks.
+
+```bash
+python3 daemon/hub.py
+```
+
+The hub polls the usage numbers, scans your transcripts for the Stats page and
+listens for hook events exactly as the Bluetooth bridge does — a worker machine
+cannot tell the two apart, so the join one-liner below is unchanged. Devices
+find it over mDNS (`_clawdmeter._tcp`), so nothing is configured on them but
+the WiFi credentials, which you type into the device yourself:
+
+```
+wifi <ssid> <password>
+```
+
+over its serial console (they go straight into the device's own storage and
+from there only to your access point). `wifi` on its own reports the link, the
+address, the hub it found and the signal strength. A hub needs no Bluetooth at
+all, so it runs happily on a headless box.
+
+Devices hold a long-poll open rather than asking repeatedly, so an alert
+reaches every desk in about 30 ms while an idle account costs one request per
+25 seconds.
+
 ### Companion: this Mac and every other machine
 
 Think of two roles. The **bridge** is the computer with the Bluetooth link
