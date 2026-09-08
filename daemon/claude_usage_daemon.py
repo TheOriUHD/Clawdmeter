@@ -23,8 +23,18 @@ import time
 from pathlib import Path
 
 import httpx
-from bleak import BleakClient
-from bleak.exc import BleakError
+
+# A WiFi hub (hub.py) reuses this module's usage polling on a headless box that
+# has no Bluetooth at all, so the BLE transport is imported softly. Every use of
+# BleakClient sits behind the BLE main loop, which such a host never runs.
+try:
+    from bleak import BleakClient
+    from bleak.exc import BleakError
+except ImportError:  # pragma: no cover - exercised on hosts without bleak
+    BleakClient = None
+
+    class BleakError(Exception):
+        pass
 
 # Companion (live Claude Code session state, see companion.py) and the usage
 # history behind the device's Trend page (trend.py). Importable both as a plain

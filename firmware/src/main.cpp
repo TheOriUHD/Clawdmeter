@@ -19,10 +19,14 @@
 #include "hal/touch_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
+#ifdef CLAWD_LINK_WIFI
+#include "link_wifi.h"
+#endif
 #include <Preferences.h>
 #include <esp_system.h>
 
 static void print_boot_record(void);
+
 #include "hal/imu_hal.h"
 #include "hal/sound_hal.h"
 
@@ -370,6 +374,15 @@ static void check_serial_cmd() {
                 Serial.printf("swipe %s %lu\n", dir > 0 ? "up" : dir < 0 ? "down" : "?", (unsigned long)ms);
             }
             else if (strcmp(cmd_buf, "stats") == 0) print_stats();
+#ifdef CLAWD_LINK_WIFI
+            else if (strcmp(cmd_buf, "wifi") == 0) link_wifi_status();
+            else if (strncmp(cmd_buf, "wifi ", 5) == 0) {
+                char* ssid = cmd_buf + 5;
+                char* sp = strchr(ssid, ' ');          // SSID, space, then the rest is the key
+                if (!sp) Serial.println("usage: wifi <ssid> <password>");
+                else { *sp = '\0'; link_wifi_set_credentials(ssid, sp + 1); }
+            }
+#endif
             else if (strcmp(cmd_buf, "tap") == 0) {
                 const bool a0 = ui_alert_active();
                 const bool s0 = ui_get_current_screen() == SCREEN_SPLASH;
